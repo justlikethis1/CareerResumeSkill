@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "DeepSeek-powered MCP skill for truthful JD-tailored resumes and cover letters"
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["resume", "cover letter", "ATS", "MCP", "DeepSeek"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Framework :: AsyncIO",
+  "Topic :: Text Processing",
+]
 dependencies = [
   "beautifulsoup4>=4.12.0",
   "httpx>=0.27.0,<1.0.0",
@@ -21,6 +27,9 @@ dependencies = [
   "python-docx>=1.1.0",
   "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/justlikethis1/CareerResumeSkill"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3.0", "ruff>=0.9.0"]
