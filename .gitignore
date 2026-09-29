@@ -1,0 +1,18 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+.env.*
+!.env.example
+!.env.template
+secrets/
+*.secret
+output/
+.career_ledger.json
+.tools/
+# Private candidate resume and JD source files; do not publish these fixtures.
+test/
+*.aux
+*.log
+*.out

@@ -1,0 +1,47 @@
+{
+  "name": "Candidate Name",
+  "contact": {
+    "email": "candidate@example.com",
+    "phone": "+852 0000 0000",
+    "location": "Hong Kong",
+    "linkedin": "https://www.linkedin.com/in/candidate",
+    "github": "https://github.com/candidate"
+  },
+  "profile": "MSc candidate focused on machine learning systems and quantitative engineering.",
+  "sections": [
+    {
+      "type": "education",
+      "title": "Education",
+      "items": [
+        {
+          "title": "MSc in Artificial Intelligence",
+          "organization": "University Name",
+          "location": "Hong Kong",
+          "dates": "2025--2026",
+          "bullets": ["Relevant coursework: machine learning, optimization, and distributed systems."]
+        }
+      ]
+    },
+    {
+      "type": "projects",
+      "title": "Selected Projects",
+      "items": [
+        {
+          "title": "Verified Project Title",
+          "organization": "Personal Project",
+          "location": "Hong Kong",
+          "dates": "2026",
+          "bullets": [
+            "Built a PyTorch training pipeline using mixed precision.",
+            "Measured inference latency under a documented evaluation setup."
+          ]
+        }
+      ]
+    }
+  ],
+  "skills": {
+    "Languages": ["Python", "C++"],
+    "ML Systems": ["PyTorch", "CUDA"],
+    "Methods": ["Mixed Precision", "Backtesting"]
+  }
+}

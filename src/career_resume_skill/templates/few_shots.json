@@ -1,0 +1,114 @@
+{
+  "roles": {
+    "ai_research": {
+      "role_type": "ai_research",
+      "level": "full_lexical_projection",
+      "source_item_id": "example:ai:0",
+      "source_bullet": "Built a PyTorch preference-alignment pipeline with DPO and LoRA, improving reward-model accuracy by 5% while reducing out-of-domain drift by 8%.",
+      "verified_metrics": ["5%", "8%"],
+      "jd_target_pain_points": ["alignment quality", "out-of-domain robustness"],
+      "bad_cases": [
+        {"output": "Trained a PPO model on a Ray cluster with 99% accuracy.", "flaw": "PPO, Ray, and 99% are unsupported in the source evidence."},
+        {"output": "Improved alignment with DPO.", "flaw": "Dropped the verified 5% and 8% effects and omitted required content."}
+      ],
+      "good_case": {
+        "source_item_id": "example:ai:0",
+        "bullets": [{"text": "Built a PyTorch preference-alignment pipeline with DPO and LoRA to improve reward-model accuracy by 5% while reducing out-of-domain drift by 8%.", "evidence_ids": ["example:ai:0:bullet:0"]}]
+      }
+    },
+    "quant_fintech": {
+      "role_type": "quant_fintech",
+      "level": "full_lexical_projection",
+      "source_item_id": "example:quant:0",
+      "source_bullet": "Engineered a C++ order-book backtester with low-latency matching logic and latency instrumentation, reducing median execution time by 22% and keeping tick processing at sub-10ms.",
+      "verified_metrics": ["22%", "sub-10ms"],
+      "jd_target_pain_points": ["execution latency", "order-book stability"],
+      "bad_cases": [
+        {"output": "Deployed a Ray-powered trading system on global market streams.", "flaw": "Ray, global trade scope, and the 22%/sub-10ms evidence are unsupported."},
+        {"output": "Built a C++ trading engine.", "flaw": "Dropped the verified 22% improvement and sub-10ms result."}
+      ],
+      "good_case": {
+        "source_item_id": "example:quant:0",
+        "bullets": [{"text": "Engineered a C++ order-book backtester with low-latency matching logic and latency instrumentation, reducing median execution time by 22% and keeping tick processing at sub-10ms.", "evidence_ids": ["example:quant:0:bullet:0"]}]
+      }
+    },
+    "systems_infra": {
+      "role_type": "systems_infra",
+      "level": "strategic_re_anchoring",
+      "source_item_id": "example:systems:0",
+      "source_bullet": "Built a Kafka and Spark data pipeline with Python and SQL, lowering queue lag by 20% and reducing failed job retries by 35%.",
+      "verified_metrics": ["20%", "35%"],
+      "jd_target_pain_points": ["pipeline reliability", "throughput stability"],
+      "bad_cases": [
+        {"output": "Migrated everything to a containerized global platform.", "flaw": "Global platform scope and both metrics are unsupported."},
+        {"output": "Improved a Spark pipeline.", "flaw": "Dropped the specific 20% and 35% measurements and the SQL/Kafka context."}
+      ],
+      "good_case": {
+        "source_item_id": "example:systems:0",
+        "bullets": [{"text": "Built a Kafka and Spark data pipeline with Python and SQL, lowering queue lag by 20% and reducing failed job retries by 35%.", "evidence_ids": ["example:systems:0:bullet:0"]}]
+      }
+    },
+    "data_engineering": {
+      "role_type": "data_engineering",
+      "level": "strategic_re_anchoring",
+      "source_item_id": "example:data:0",
+      "source_bullet": "Built a dbt and Spark pipeline with PostgreSQL and ClickHouse for daily revenue reporting, cutting nightly refresh time by 30% and reducing failed jobs by 12%.",
+      "verified_metrics": ["30%", "12%"],
+      "jd_target_pain_points": ["workflow reliability", "data freshness"],
+      "bad_cases": [
+        {"output": "Migrated analytics to Tableau and Snowflake at enterprise scale.", "flaw": "Tableau and Snowflake are not in the evidence and the metrics are dropped."},
+        {"output": "Built a SQL workflow for revenue reporting.", "flaw": "Dropped the verified dbt, Spark, PostgreSQL, ClickHouse, 30%, and 12% facts."}
+      ],
+      "good_case": {
+        "source_item_id": "example:data:0",
+        "bullets": [{"text": "Built a dbt and Spark pipeline with PostgreSQL and ClickHouse for daily revenue reporting, cutting nightly refresh time by 30% and reducing failed jobs by 12%.", "evidence_ids": ["example:data:0:bullet:0"]}]
+      }
+    },
+    "general_software": {
+      "role_type": "general_software",
+      "level": "strategic_re_anchoring",
+      "source_item_id": "example:software:0",
+      "source_bullet": "Shipped a FastAPI microservice with PostgreSQL persistence and async workers, reducing p95 latency by 20% while improving throughput stability.",
+      "verified_metrics": ["20%"],
+      "jd_target_pain_points": ["API responsiveness", "service throughput"],
+      "bad_cases": [
+        {"output": "Deployed a Kubernetes platform for global customer reporting.", "flaw": "Kubernetes, global deployment, and the 20% latency evidence are unsupported."}
+      ],
+      "good_case": {
+        "source_item_id": "example:software:0",
+        "bullets": [{"text": "Shipped a FastAPI microservice with PostgreSQL persistence and async workers, reducing p95 latency by 20% while improving throughput stability.", "evidence_ids": ["example:software:0:bullet:0"]}]
+      }
+    }
+  },
+  "polish": {
+    "role_type": "any",
+    "level": "polish_only",
+    "source_item_id": "example:polish:0",
+    "source_bullet": "Built a Tableau dashboard with SQL aggregates and KPI drilldowns, reducing refresh time by 25% while making exceptions easier to spot.",
+    "verified_metrics": ["25%"],
+    "jd_target_pain_points": ["reporting clarity", "data refresh latency"],
+    "bad_cases": [
+      {"output": "Delivered a global BI transformation program.", "flaw": "Global program scope and the 25% improvement are unsupported."}
+    ],
+    "good_case": {
+      "source_item_id": "example:polish:0",
+      "bullets": [{"text": "Built a Tableau dashboard with SQL aggregates and KPI drilldowns, reducing refresh time by 25% while making exceptions easier to spot.", "evidence_ids": ["example:polish:0:bullet:0"]}]
+    }
+  },
+  "cover": {
+    "source_evidence": "Built a PostgreSQL-backed reporting pipeline and reduced refresh latency by 25%.",
+    "target_role": "Data Analyst",
+    "bad_case": {"text": "Your company recently launched a leading global analytics platform.", "flaw": "The launch claim and platform claim were not supplied as verified context."},
+    "good_case": {
+      "salutation": "Dear Hiring Team,",
+      "paragraphs": [
+        "A PostgreSQL-backed reporting pipeline that reduced refresh latency by 25% reflects the evidence-driven delivery discipline this Data Analyst role requires.",
+        "I built the pipeline to make reporting both faster and dependable, balancing refresh efficiency with operational clarity as shown by the verified 25% latency reduction.",
+        "I welcome a technical discussion about how this evidence-backed reporting workflow could support the team's data decisions."
+      ],
+      "closing": "Sincerely,\nExample Candidate",
+      "evidence_ids": ["example:cover:0:bullet:0"],
+      "evidence_gaps": []
+    }
+  }
+}

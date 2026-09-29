@@ -1,0 +1,42 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+<% if compact == 0 %>\newcommand{\resumeMargin}{0.58in}
+\newcommand{\resumeItemSep}{1pt}
+\newcommand{\resumeSectionSep}{4pt}
+\newcommand{\resumeLineSpread}{1.0}<% elif compact == 1 %>\newcommand{\resumeMargin}{0.50in}
+\newcommand{\resumeItemSep}{0pt}
+\newcommand{\resumeSectionSep}{3pt}
+\newcommand{\resumeLineSpread}{0.97}<% else %>\newcommand{\resumeMargin}{0.44in}
+\newcommand{\resumeItemSep}{0pt}
+\newcommand{\resumeSectionSep}{2pt}
+\newcommand{\resumeLineSpread}{0.95}<% endif %>
+\usepackage[margin=\resumeMargin]{geometry}
+\linespread{\resumeLineSpread}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlist[itemize]{leftmargin=*,itemsep=\resumeItemSep,topsep=1pt,parsep=0pt,partopsep=0pt}
+\newcommand{\resumeSection}[1]{\vspace{\resumeSectionSep}{\large\bfseries #1}\par\vspace{1pt}\hrule\vspace{2pt}}
+\newcommand{\resumeSubheading}[4]{\textbf{#1}\hfill #2\\\textit{#3}\hfill\textit{#4}\par}
+\newcommand{\resumeItem}[1]{\item #1}
+\begin{document}
+\begin{center}
+{\LARGE\bfseries << name >>}\\
+<< contact.email >><% if contact.get('phone') %> $\vert$ << contact.phone >><% endif %><% if contact.get('location') %> $\vert$ << contact.location >><% endif %><% if contact.get('linkedin') %> $\vert$ \href{<< contact.linkedin >>}{LinkedIn}<% endif %><% if contact.get('github') %> $\vert$ \href{<< contact.github >>}{GitHub}<% endif %>
+\end{center}
+<% if profile %><< profile >>\par<% endif %>
+<% for section in sections %>
+\resumeSection{<< section.title >>}
+<% for item in section.get('items', []) %>
+\resumeSubheading{<< item.get('title', '') >>}{<< item.get('dates', '') >>}{<< item.get('organization', '') >>}{<< item.get('location', '') >>}
+<% if item.get('bullets') %>\begin{itemize}
+<% for bullet in item.bullets %>\resumeItem{<< bullet >>}
+<% endfor %>\end{itemize}<% endif %>
+<% endfor %>
+<% endfor %>
+<% if skills %>\resumeSection{Skills}
+<% for group, values in skills.items() %>\textbf{<< group|latex_escape >>:} <% if values is string %><< values >><% else %><< values|join(', ') >><% endif %>\\
+<% endfor %><% endif %>
+\end{document}

@@ -1,0 +1,53 @@
+{
+  "name": "",
+  "contact": {
+    "email": "",
+    "phone": "",
+    "location": "",
+    "linkedin": "",
+    "github": ""
+  },
+  "profile": "",
+  "sections": [
+    {
+      "type": "education",
+      "title": "Education",
+      "items": [
+        {
+          "title": "",
+          "organization": "",
+          "location": "",
+          "dates": "",
+          "bullets": []
+        }
+      ]
+    },
+    {
+      "type": "research",
+      "title": "Research Experience",
+      "items": []
+    },
+    {
+      "type": "publications",
+      "title": "Publications",
+      "items": []
+    },
+    {
+      "type": "experience",
+      "title": "Experience",
+      "items": []
+    },
+    {
+      "type": "projects",
+      "title": "Projects",
+      "items": []
+    }
+  ],
+  "skills": {
+    "Languages": [],
+    "Frameworks": [],
+    "ML Systems": [],
+    "Methods": [],
+    "Tools": []
+  }
+}
