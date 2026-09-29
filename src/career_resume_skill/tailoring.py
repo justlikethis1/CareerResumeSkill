@@ -13,7 +13,7 @@ from .analysis import (
     build_gap_analysis,
     score_text_relevance,
 )
-from .config import COVER_LETTER_TARGET_MAX_WORDS, COVER_LETTER_TARGET_MIN_WORDS
+from .critic.cl_critic import CoverLetterCritic
 from .facts import (
     build_fact_cards,
     extract_hallucination_blacklist_terms,
@@ -26,6 +26,8 @@ from .facts import (
 from .few_shots import cover_exemplar, resume_exemplars
 from .llm import SYSTEM_RULES, LLMProvider
 from .models import (
+    COVER_LETTER_TARGET_MAX_WORDS,
+    COVER_LETTER_TARGET_MIN_WORDS,
     CoverLetter,
     CoverLetterDraft,
     GeneratedTailoring,
@@ -34,7 +36,7 @@ from .models import (
     validate_master_cv,
 )
 from .quality import _is_primary_metric
-from .text_utils import normalize_sentence_ending
+from .text_utils import normalize_sentence_ending, normalize_technology_casing
 
 TAILOR_TASK = """Generate a JD-tailored resume JSON from verified evidence.
 
@@ -52,11 +54,13 @@ DYNAMIC PYRAMID ALLOCATION:
 - Treat measured line width as a local font estimate; preserve complete words and allow a short final line rather
     than forcing orphan words or synthetic filler.
 - Tier 1 hero items: 3-4 bullets covering architecture/problem, methodology/depth, and verified impact.
-- ORTHOGONAL NARRATIVE AXES for 3-4 bullets on one source item: A) Problem & Formulation, the bottleneck and
+- TIER 1 AXIS CONTRACT: when a Tier 1 item has at least three distinct supported facts, you MUST assign its bullets
+    to distinct axes rather than repeating one achievement. Use A) Problem & Formulation, the bottleneck and
     technical framing; B) Algorithm & Dynamics, the mechanism, optimization, loss, or tuning strategy; C) Quantified
     Impact, the exact verified metrics and benchmark outcome; D) Systems & Reproducibility, the evaluation loop,
-    automation, deployment, or operationalization. Do not repeat A/B in D, and omit an axis when the evidence cannot
-    support it. A single source fact may not be paraphrased into multiple sibling bullets.
+    automation, deployment, or operationalization. For three bullets, select three distinct supported axes; for four,
+    use four only when evidence supports them. Do not repeat A/B in D, omit unsupported axes, and never paraphrase one
+    source fact into multiple sibling bullets.
 - Tier 2 supporting items: 2 bullets covering technical method and verified outcome.
 - Tier 3 ancillary items: 1 concise evidence-dense bullet.
 - Do not force equal bullet counts across items.
@@ -113,18 +117,27 @@ CONTENT FIDELITY AND DENSITY:
     MASTER_CV skills. Never output bullet symbols, markdown, trailing dashes, or padding inside bullet text.
 - When EXACT_SUPPORTED_JD_PHRASES is supplied, use the supported phrase in at least one relevant hero/supporting
     bullet when grammatically natural; do not replace it with a vague synonym merely to be conservative.
+- HISTORICAL_GAP_REMINDERS are prior ATS misses, not evidence or requirements to claim. Reuse a reminder only when
+    the current item's cited Master CV evidence directly supports it; otherwise leave it as an evidence gap.
 - End every bullet with one standard period. Return only the requested schema."""
 
 COVER_TASK = f"""Draft a high-impact professional three-paragraph cover letter targeting \
 {COVER_LETTER_TARGET_MIN_WORDS}-{COVER_LETTER_TARGET_MAX_WORDS} English words.
 
+Tone: formal, objective, and contribution-focused. Avoid generic or emotional phrases:
+{', '.join(CoverLetterCritic.FORBIDDEN_BUZZWORDS)}. Prefer evidence-backed active verbs such as engineered,
+optimized, benchmarked, mitigated, implemented, or quantified only when the cited work supports the verb.
+Use direct sentences averaging no more than 25 words; avoid informal contractions. Do not invent prestige,
+employers, academic credentials, metrics, technical methods, or company initiatives.
+
 Paragraph 1 (50-70 words): hook-first value proposition. Do not begin with "I am applying", "I am writing to
 apply", or "I am interested in". If the opening uses a candidate identity as a modifier, use a grammatically
 complete construction such as "As an AI systems engineer who..." rather than a dangling "An AI systems engineer,
-I...". Open with the candidate's verified technical/functional identity and methodology,
-then connect it to the role's core challenge and the specific value offered. State academic status only when verified.
+I...". In the first sentence, identify the target role and the candidate's verified technical/functional identity;
+in the second sentence, surface the strongest directly relevant evidence and its exact verified outcome. Keep any
+application-intent boilerplate to at most one short sentence. State academic status only when verified.
 
-Paragraph 2 (150-180 words): one cohesive deep-dive story using the two strongest evidence-backed experiences.
+Paragraph 2 (140-175 words; accepted 120-195): one cohesive deep-dive story using the two strongest evidence-backed experiences.
 Explain the technical bottleneck, architecture/algorithmic decisions, evidence-supported trade-offs, and exact verified outcomes. Weave in
 JD terminology via semantic_mapping_directives without claiming unverified work. Do not produce a skill list or
 relabel DPO as sparse-reward learning, or time-series forecasting as long-horizon agent trajectory modeling.
@@ -137,7 +150,12 @@ than repeat Paragraph 2's long phrases, tools, datasets, or metrics verbatim.
 
 Paragraph 3 (60-80 words): team alignment and active technical call to action. Use verified_company_context for any specific
 company claim; otherwise discuss only the verified JD domain. Emphasize converting complex algorithms into
-stable, reproducible engineering workflows and invite a technical discussion.
+stable, reproducible engineering workflows, invite a technical discussion, and thank the reader briefly.
+
+ANTI-REPETITION:
+- Make Paragraph 3 synthesize the candidate's value with fresh wording. Avoid repeating distinctive 6+ word phrases,
+  technical constructs, or metrics already used in Paragraphs 1 and 2; maintain conceptual continuity without
+  reusing the same sentence frame.
 
 EXACT LEXICON GROUNDING:
 - Prefer one or two exact JD phrases when the cited evidence directly supports their underlying method and result.
@@ -154,7 +172,8 @@ COMPANY CLAIM SANDBOX:
 - If COMPANY_CLAIM_POLICY is verified_context_only, specific company claims must be supported by the
     exact verified_company_context; do not add surrounding unverified history or plans.
 
-Hard constraints: exactly three cohesive prose paragraphs; no bullet points; no generic boilerplate such as
+Hard constraints: exactly three cohesive prose paragraphs; no bullet points; closing must contain only a formal
+salutation such as "Sincerely" (the typed candidate name is added by the document renderer); no generic boilerplate such as
 "I am writing to apply", "My background includes", or "Relevant evidence includes". Cite all candidate claims
 through EVIDENCE_INDEX. Do not transfer JD mechanisms (including long-horizon RL or sparse feedback) to candidate
 Do not transfer JD mechanisms (including long-horizon RL or sparse feedback) to candidate
@@ -165,6 +184,10 @@ instead of restating the opening's "complex algorithms" or "stable workflows" co
 Return only the requested schema."""
 
 CHINESE_RESUME_TASK = """Write resume bullets in natural Simplified Chinese for a mainland technical recruiter.
+Every generated bullet must contain Chinese narrative text even when the source bullet is entirely English.
+Keep English only for verified proper names, tools, acronyms and measurements (for example Python or DPO);
+never copy a whole English source sentence into an output bullet. Preserve the original Master CV skills
+without translating, expanding, or reclassifying them; the renderer uses the verified source skill list.
 Use concise action/problem/method/verified-result phrasing, not literal English translation. Preserve each
 source item's evidence IDs, named tools and original numeric metrics exactly. Do not promote involvement to
 leadership (e.g. 主导) unless the source explicitly proves ownership. End bullets with 。; keep section titles,
@@ -413,12 +436,11 @@ async def tailor_resume(
         for record in evidence_index
         if extract_metrics(record.text)
     }
-    generated = await client.complete_json(
-        _tailoring_task(
-            jd_analysis.get("role_type", ""),
-            jd_analysis.get("resume_language", "en"),
-        ),
-        {
+    task = _tailoring_task(
+        jd_analysis.get("role_type", ""),
+        jd_analysis.get("resume_language", "en"),
+    )
+    payload = {
             "MASTER_CV": master_data,
             "EVIDENCE_INDEX": [record.model_dump() for record in evidence_index],
             "FACT_CARDS": build_fact_cards(validated_cv),
@@ -427,39 +449,63 @@ async def tailor_resume(
             "SOURCE_BULLET_BUDGETS": jd_analysis.get("source_bullet_budgets", {}),
             "ITEM_BULLET_BUDGETS": jd_analysis.get("item_bullet_budgets", {}),
             "REQUIRED_METRICS_BY_SOURCE_ITEM": required_metrics_by_item,
+            "HISTORICAL_GAP_REMINDERS": jd_analysis.get("historical_gap_reminders", []),
             "EXACT_SUPPORTED_JD_PHRASES": _supported_exact_jd_phrases(
                 jd_analysis,
                 " ".join(record.text for record in evidence_index),
             ),
-        },
-        GeneratedTailoring,
-        temperature=0.45,
+    }
+    for attempt in range(2):
+        generated = await client.complete_json(
+            task, payload, GeneratedTailoring, temperature=0.45 if attempt == 0 else 0.25
+        )
+        if jd_analysis.get("resume_language") == "zh_CN":
+            generated = generated.model_copy(update={"skills": validated_cv.skills})
+        result = _hydrate_generated_resume(
+            validated_cv, generated, jd_analysis.get("item_bullet_budgets", {})
+        )
+        result.setdefault("strategy", {})["item_scores"] = local_item_scores
+        _remove_near_duplicate_bullets(result)
+        _normalize_bullet_punctuation(result)
+        unsupported_by_item: dict[str, list[str]] = {}
+        untranslated_items: list[str] = []
+        for section in result["sections"]:
+            for item in section["items"]:
+                item_id = item["source_item_id"]
+                if jd_analysis.get("resume_language") == "zh_CN" and any(
+                    not re.search(r"[\u4e00-\u9fff]", bullet) for bullet in item["bullets"]
+                ):
+                    untranslated_items.append(item_id)
+                source_text = " ".join(
+                    record.text for record in evidence_index
+                    if record.evidence_id == item_id
+                    or record.evidence_id.startswith(f"{item_id}:bullet:")
+                )
+                item["bullets"] = [
+                    normalize_technology_casing(bullet, source_text) for bullet in item["bullets"]
+                ]
+                unsupported = _unsupported_technology_claims(
+                    source_text, " ".join(item["bullets"])
+                )
+                if unsupported:
+                    unsupported_by_item[item_id] = sorted(unsupported)
+        if not unsupported_by_item and not untranslated_items:
+            break
+        if attempt == 1:
+            if unsupported_by_item:
+                raise ValueError(
+                    f"Generated content contains unverified tools/technologies: {unsupported_by_item}"
+                )
+            raise ValueError(f"Chinese resume requires Chinese text in every generated bullet: {untranslated_items}")
+        task += (
+            "\n\nRewrite only claims supported by each source item's own evidence. "
+            "Do not transfer a skill from the global skills list to an item without item-level proof. "
+            f"Unsupported terms by source_item_id: {unsupported_by_item}. "
+            f"Items with non-Chinese bullets to rewrite in Simplified Chinese: {untranslated_items}."
+        )
+    result["profile"] = normalize_technology_casing(
+        result["profile"], " ".join(record.text for record in evidence_index)
     )
-    result = _hydrate_generated_resume(
-        validated_cv, generated, jd_analysis.get("item_bullet_budgets", {})
-    )
-    result.setdefault("strategy", {})["item_scores"] = local_item_scores
-    _remove_near_duplicate_bullets(result)
-    _normalize_bullet_punctuation(result)
-    source_records = build_evidence_index(validated_cv)
-    for section in result["sections"]:
-        for item in section["items"]:
-            item_id = item["source_item_id"]
-            source_text = " ".join(
-                record.text for record in source_records
-                if record.evidence_id == item_id
-                or record.evidence_id.startswith(f"{item_id}:bullet:")
-            )
-            proposed_text = " ".join(item["bullets"])
-            unsupported = _unsupported_technology_claims(source_text, proposed_text)
-            if unsupported:
-                rejected = sorted(unsupported)
-                raise ValueError(f"Generated content contains unverified tools/technologies: {rejected}")
-    if jd_analysis.get("resume_language") == "zh_CN" and any(
-        not re.search(r"[\u4e00-\u9fff]", bullet)
-        for section in result["sections"] for item in section["items"] for bullet in item["bullets"]
-    ):
-        raise ValueError("Chinese resume requires Chinese text in every generated bullet")
     candidate_claims = {
         key: result.get(key)
         for key in ("profile", "sections", "skills")
@@ -494,9 +540,8 @@ async def draft_cover(
         return CoverLetter.model_validate(
             _deterministic_cover(validated_cv, company_name)
         ).model_dump()
-    generated = await client.complete_json(
-        COVER_TASK + ("\n\n" + cover_exemplar() if not verified_company_context.strip() else ""),
-        {
+    task = COVER_TASK + ("\n\n" + cover_exemplar() if not verified_company_context.strip() else "")
+    payload = {
             **source,
             "tone": tone,
             "COMPANY_CLAIM_POLICY": (
@@ -507,10 +552,20 @@ async def draft_cover(
             "EXACT_SUPPORTED_JD_PHRASES": _supported_exact_jd_phrases(
                 jd_analysis, " ".join(fact["text"] for fact in build_fact_cards(validated_cv))
             ),
-        },
-        CoverLetterDraft,
-        temperature=0.45,
-    )
+    }
+    for attempt in range(2):
+        generated = await client.complete_json(
+            task, payload, CoverLetterDraft, temperature=0.45 if attempt == 0 else 0.25
+        )
+        critic_issues = CoverLetterCritic.audit(generated.paragraphs).issues
+        if not critic_issues:
+            break
+        if attempt == 1:
+            raise ValueError("Cover letter critic failed: " + "; ".join(critic_issues))
+        task += (
+            "\n\nRewrite the entire cover letter while preserving cited facts and word budgets. Fix: "
+            + "; ".join(critic_issues)
+        )
     result = generated.model_dump()
     result["paragraphs"] = [
         re.sub(
@@ -526,6 +581,9 @@ async def draft_cover(
     cited_source = " ".join(
         record.text for record in evidence_index if record.evidence_id in cited_ids
     )
+    result["paragraphs"] = [
+        normalize_technology_casing(paragraph, cited_source) for paragraph in result["paragraphs"]
+    ]
     unsupported_technologies = _unsupported_technology_claims(
         cited_source, " ".join(result["paragraphs"])
     )

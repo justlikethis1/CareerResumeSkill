@@ -25,6 +25,14 @@ def test_missing_libreoffice_is_represented_as_optional() -> None:
     assert executable is None or Path(executable).name.casefold() == "soffice.exe"
 
 
+def test_explicit_libreoffice_path_override_is_honored(monkeypatch, tmp_path: Path) -> None:
+    executable = tmp_path / "soffice-custom.exe"
+    executable.write_bytes(b"")
+    monkeypatch.setenv("LIBREOFFICE_PATH", str(executable))
+
+    assert find_libreoffice() == str(executable.resolve())
+
+
 def test_environment_output_path_is_resolved_at_config_load(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAREER_SKILL_OUTPUT_DIR", "relative-output")

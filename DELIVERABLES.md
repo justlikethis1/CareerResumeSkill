@@ -25,7 +25,7 @@ Use `--output-dir <directory>` to pin a run's generated reports and LaTeX artifa
 
 ## Verification status
 The current codebase is verified by the project test suite:
-- `pytest -q`: 212 passed
+- `pytest -q`: 235 passed
 - `ruff check src/career_resume_skill tests`: all checks passed
 
 ## Component Coverage
@@ -76,10 +76,17 @@ Date: 2026-09-29. Fresh isolated outputs were generated after the review-driven 
 - HTML JD ingestion now honors HTTP charset, HTML meta charset, UTF-8, GB18030, and Big5 fallbacks.
 - LLM JSON repair uses a bounded sliding context and retries empty/runtime/API failures without accumulating the full failed history.
 - DOCX import recognizes common Chinese role titles, and owned image-extraction resources support explicit cleanup/context-manager use.
-- Ledger and private Master CV history updates use atomic lock files to prevent concurrent lost updates; macOS LibreOffice discovery is supported.
+- Ledger and private Master CV history updates use OS-held cross-process locks plus atomic JSON replacement; same-role historical reminders share the lock, and macOS LibreOffice discovery is supported.
+- Cover Letter word-budget rules now live with the Pydantic model; metric units are declared separately and composed into the extractor regex; ATS handles selected phrase-level singular/plural variants without external stemming dependencies.
+- Independent LaTeX Resume/Cover Letter compilation and Cover Letter TXT/Markdown writes now run concurrently; DOCX source-baseline conversion and Cover Letter compilation also run concurrently. Geometry refinement remains sequential because patches share one mutable resume and require revalidation after each change.
+- Optional `LIBREOFFICE_PATH`, `TECTONIC_PATH`, and `MICROSOFT_WORD_PATH` overrides support custom compiler installations; `PageLimitError.to_dict()` exposes machine-readable page/limit/log context.
+- LLM schema-repair attempts now lower temperature/top-p within bounded floors; same-role, low-score Ledger gaps are supplied only as evidence-gated review reminders, never as candidate facts.
+- ATS package scoring now includes Resume and Cover Letter text while retaining a nested `resume_only` score and missing-keyword breakdown, so Cover Letter matches do not hide Resume-specific gaps.
+- Live API follow-up: Cover Letter repetition is now included in bounded rewrite feedback and delivery verification; unsupported per-item technologies receive one evidence-scoped retry. Chinese resumes preserve original Master CV skills and retry English-only bullets once; the September 30 Chinese DOCX live attempts still failed the Chinese bullet gate. The English DOCX live retry reached Cover Letter validation but failed the former 140-word second-paragraph minimum; the supported minimum is now 120 words with the total word budget unchanged. No successful post-change live delivery is claimed.
 - Phase 2 now includes deterministic `critic/` modules for Cover Letter grammar/repetition and DOCX bullet filler diagnostics.
 - Text-content review now also checks duplicate Resume bullets, Markdown prefixes, abnormal whitespace, sentence endings, Cover Letter boilerplate, and paragraph structure.
 - `docx_sanitizer.py` centralizes lexical and OOXML sanitization; Harness typography checks hard-fail extraction-visible trailing dash artifacts.
+- PDF sanitization now handles grouped and per-glyph `TJ` dash encodings without re-adding pages to a cloned `PdfWriter`; regression coverage verifies page count remains unchanged.
 - Phase 3 now includes an offline `harness/` package with report assertions and `python -m career_resume_skill.harness` scorecard generation.
 - Phase 1 Pipeline 拆分已取消；系统继续使用 `ApplicationService` 作为唯一用例编排层，MCP/CLI 公共接口保持不变。
 
@@ -96,6 +103,12 @@ The newest complete fixed-directory API run is `output/deliveries/api-run-202609
 The latest complete API run is `output/deliveries/api-run-20260929-final-v2`. The first LaTeX attempt was correctly rejected for a missing source-item Evidence ID; its retry and the DOCX route both passed `verified=true`, produced one-page Resume/Cover Letter artifacts, passed Harness/Critic/integrity checks, and wrote Ledger entries.
 
 The sanitizer architecture validation is `output/deliveries/api-run-20260929-sanitizer-v1`. The final LaTeX retry and DOCX retry both passed `verified=true`, produced one-page Resume/Cover Letter artifacts, passed all content/DOCX/Typography Critics, contained no extraction-visible trailing dash lines, and wrote Ledger entries. Earlier attempts correctly demonstrated technology, metric, and repetition safety rejections.
+
+The latest PDF dash-sanitizer verification is `output/deliveries/api-run-20260929-dashfix-v2/application-report.json`: the DOCX route produced exactly one PDF page, raw extracted text contained zero trailing dash lines, Critic/integrity checks passed, and the delivery was recorded in Ledger.
+
+The latest full phase-three API run is `output/deliveries/api-run-20260929-phase3-v1`. Both LaTeX and DOCX routes passed with one-page Resume/Cover Letter artifacts, all integrity and content Critic checks passed, raw PDF text contained no trailing dash artifacts, the Harness scorecard passed, and both Ledger entries were written.
+
+Latest full component run: `output/deliveries/api-run-20260929-final-v4`. Environment, 217 tests, and Ruff passed. The DOCX route and Harness passed with one page, zero raw PDF trailing-dash lines, all integrity/Critic checks green, and a Ledger entry. Three LaTeX attempts were safely rejected for unsupported source-item technologies or Cover Letter evidence/blacklist violations; no safety checks were relaxed.
 
 ## Latest Fixed-Directory API Run
 

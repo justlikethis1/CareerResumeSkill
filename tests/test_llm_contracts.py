@@ -15,9 +15,11 @@ class _Completions:
     def __init__(self, contents: list[str]) -> None:
         self.contents = iter(contents)
         self.calls = 0
+        self.call_arguments: list[dict[str, object]] = []
 
-    async def create(self, **_: object) -> SimpleNamespace:
+    async def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls += 1
+        self.call_arguments.append(kwargs)
         content = next(self.contents)
         message = SimpleNamespace(content=content)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
@@ -29,9 +31,10 @@ class _FakeOpenAI:
 
 
 def _valid_cover_paragraphs() -> list[str]:
-    return [" ".join([word] * count) for word, count in (
-        ("Opening", 55), ("Evidence", 155), ("Alignment", 65),
-    )]
+    return [" ".join(
+        " ".join([word] * min(15, count - index)) + "."
+        for index in range(0, count, 15)
+    ) for word, count in (("Opening", 55), ("Evidence", 155), ("Alignment", 65))]
 
 
 def test_complete_json_repairs_invalid_schema_once() -> None:
@@ -56,6 +59,9 @@ def test_complete_json_repairs_invalid_schema_once() -> None:
 
     assert result.paragraphs == _valid_cover_paragraphs()
     assert fake.chat.completions.calls == 2
+    assert fake.chat.completions.call_arguments[0]["temperature"] == 0.2
+    assert fake.chat.completions.call_arguments[1]["temperature"] == 0.1
+    assert fake.chat.completions.call_arguments[0]["top_p"] > fake.chat.completions.call_arguments[1]["top_p"]
 
 
 def test_complete_json_retries_empty_response_with_bounded_repair_context() -> None:
@@ -152,6 +158,19 @@ def test_repair_guidance_expands_cover_letter_underflow_from_evidence_only() -> 
     assert "total: add at least 0 words" not in guidance
     assert "add only concise details explicitly supported by the cited evidence" in guidance.casefold()
     assert "Do not invent claims or metrics" in guidance
+
+
+def test_cover_letter_second_paragraph_allows_concise_evidence_without_padding() -> None:
+    paragraphs = _valid_cover_paragraphs()
+    paragraphs[1] = " ".join(["Evidence"] * 139)
+    CoverLetterDraft.model_validate({
+        "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
+    })
+    paragraphs[1] = " ".join(["Evidence"] * 119)
+    with pytest.raises(ValueError, match="paragraph 2=119 \\(expected 120-195\\)"):
+        CoverLetterDraft.model_validate({
+            "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
+        })
 
 
 def test_repair_guidance_restores_missing_metrics_without_invention() -> None:
@@ -287,6 +306,40 @@ def test_cover_letter_company_policy_uses_only_supplied_context() -> None:
     assert "SYNTHETIC COVER LETTER CALIBRATION" not in provider.tasks[1]
 
 
+def test_generated_resume_and_cover_use_source_supported_technology_casing() -> None:
+    class Provider:
+        available = True
+        model_name = "test"
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            if response_model.__name__ == "GeneratedTailoring":
+                return response_model.model_validate({
+                    "profile": "", "profile_evidence_ids": [],
+                    "sections": [{"type": "projects", "title": "Projects", "items": [{
+                        "source_item_id": "section:0:item:0",
+                        "bullets": [{"text": "Built a pytorch pipeline.",
+                                     "evidence_ids": ["section:0:item:0:bullet:0"]}],
+                    }]}], "skills": {}, "evidence_gaps": [], "strategy": {},
+                })
+            paragraphs = _valid_cover_paragraphs()
+            paragraphs[0] = paragraphs[0].replace("Opening", "pytorch", 1)
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["section:0:item:0:bullet:0"],
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [{"type": "projects", "title": "Projects", "items": [
+              {"title": "Pipeline", "bullets": ["Built a PyTorch pipeline."]},
+          ]}]}
+    provider = Provider()
+    resume = asyncio.run(tailor_resume(cv, {}, provider))
+    cover = asyncio.run(draft_cover(resume, "Example Co", "professional", provider))
+
+    assert resume["sections"][0]["items"][0]["bullets"] == ["Built a PyTorch pipeline."]
+    assert cover["paragraphs"][0].startswith("PyTorch ")
+
+
 def test_cover_letter_rejects_blacklisted_term_missing_from_cited_evidence() -> None:
     class OfflineProvider:
         available = False
@@ -313,6 +366,96 @@ def test_cover_letter_rejects_blacklisted_term_missing_from_cited_evidence() -> 
         asyncio.run(draft_cover(
             tailored, "Example Co", "professional", HallucinatingProvider()
         ))
+
+
+def test_cover_letter_tone_retries_with_feedback_and_lower_temperature() -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class Capture:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.calls.append((task, temperature))
+            paragraphs = _valid_cover_paragraphs()
+            if len(self.calls) == 1:
+                paragraphs[0] = "Passionate " + paragraphs[0]
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["skill:Languages:0"],
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [], "skills": {"Languages": ["Python"]}}
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = Capture()
+    cover = asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+
+    assert len(provider.calls) == 2
+    assert [temperature for _, temperature in provider.calls] == [0.45, 0.25]
+    assert "excessive_buzzwords: passionate" in provider.calls[1][0]
+    assert "Passionate" not in cover["paragraphs"][0]
+
+
+def test_cover_letter_tone_blocks_after_failed_rewrite() -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class AlwaysBuzzword:
+        available = True
+        model_name = "test"
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            paragraphs = _valid_cover_paragraphs()
+            paragraphs[0] = "Passionate " + paragraphs[0]
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["skill:Languages:0"],
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [], "skills": {"Languages": ["Python"]}}
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    with pytest.raises(ValueError, match="critic failed: excessive_buzzwords: passionate"):
+        asyncio.run(draft_cover(tailored, "Example Co", "professional", AlwaysBuzzword()))
+
+
+def test_cover_letter_cross_paragraph_repetition_requests_rewrite() -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class RepeatingProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            paragraphs = _valid_cover_paragraphs()
+            if len(self.tasks) == 1:
+                paragraphs[1] = "Opening Opening Opening Opening Opening Opening. " + paragraphs[1]
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["skill:Languages:0"],
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [], "skills": {"Languages": ["Python"]}}
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = RepeatingProvider()
+    cover = asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+    assert len(provider.tasks) == 2
+    assert "cross_paragraph_repetition:" in provider.tasks[1]
+    assert cover["paragraphs"] == _valid_cover_paragraphs()
 
 
 def test_dynamic_resume_exemplars_match_role_and_pydantic_dto() -> None:
@@ -401,18 +544,59 @@ def test_chinese_resume_generation_keeps_evidence_and_metrics() -> None:
                     "bullets": [{"text": "使用 Python 构建数据流水线，将错误率降低 5.2%",
                                  "evidence_ids": ["section:0:item:0:bullet:0"]}],
                 }]}],
-                "skills": {}, "evidence_gaps": [], "strategy": {},
+                "skills": {"Claims": ["Unverified distributed training"]},
+                "evidence_gaps": [], "strategy": {},
             })
 
     cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
           "sections": [{"type": "projects", "title": "Projects", "items": [
               {"title": "Pipeline", "bullets": ["Built a Python pipeline and reduced error by 5.2%."]}
-          ]}]}
+          ]}], "skills": {"Languages": ["Python"]}}
     result = asyncio.run(tailor_resume(cv, {"resume_language": "zh_CN"}, ChineseProvider()))
     item = result["sections"][0]["items"][0]
 
     assert item["bullets"] == ["使用 Python 构建数据流水线，将错误率降低 5.2%。"]
     assert item["evidence_ids"] == ["section:0:item:0:bullet:0"]
+    assert result["skills"] == {"Languages": ["Python"]}
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_chinese_resume_retries_untranslated_bullet(repair: bool) -> None:
+    class ChineseProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            bullet = (
+                "使用 Python 构建流水线。" if repair and len(self.tasks) == 2
+                else "Built a Python pipeline."
+            )
+            return response_model.model_validate({
+                "profile": "", "profile_evidence_ids": [],
+                "sections": [{"type": "projects", "title": "Projects", "items": [{
+                    "source_item_id": "section:0:item:0",
+                    "bullets": [{"text": bullet,
+                                 "evidence_ids": ["section:0:item:0:bullet:0"]}],
+                }]}], "skills": {}, "evidence_gaps": [], "strategy": {},
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [{"type": "projects", "title": "Projects", "items": [
+              {"title": "Pipeline", "bullets": ["Built a Python pipeline."]},
+          ]}]}
+    provider = ChineseProvider()
+    if repair:
+        result = asyncio.run(tailor_resume(cv, {"resume_language": "zh_CN"}, provider))
+        assert result["sections"][0]["items"][0]["bullets"] == ["使用 Python 构建流水线。"]
+    else:
+        with pytest.raises(ValueError, match="Chinese resume requires Chinese text"):
+            asyncio.run(tailor_resume(cv, {"resume_language": "zh_CN"}, provider))
+    assert len(provider.tasks) == 2
+    assert "section:0:item:0" in provider.tasks[1]
 
 
 def test_chinese_resume_rejects_unverified_tool() -> None:
@@ -466,3 +650,42 @@ def test_english_resume_rejects_unverified_technology(tool: str) -> None:
 
     with pytest.raises(ValueError, match="unverified tools/technologies"):
         asyncio.run(tailor_resume(cv, {"resume_language": "en"}, HallucinatingProvider()))
+
+
+def test_resume_retries_technology_claim_without_item_evidence() -> None:
+    class RepairingProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+            self.temperatures: list[float] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            self.temperatures.append(temperature)
+            bullet = (
+                "Built a Python pipeline."
+                if len(self.tasks) == 1 else "Built a documented pipeline."
+            )
+            return response_model.model_validate({
+                "profile": "", "profile_evidence_ids": [],
+                "sections": [{"type": "projects", "title": "Projects", "items": [{
+                    "source_item_id": "section:0:item:0",
+                    "bullets": [{"text": bullet,
+                                 "evidence_ids": ["section:0:item:0:bullet:0"]}],
+                }]}], "skills": {"Languages": ["Python"]},
+                "evidence_gaps": [], "strategy": {},
+            })
+
+    cv = {"name": "Candidate", "contact": {"email": "test@example.com"},
+          "sections": [{"type": "projects", "title": "Projects", "items": [
+              {"title": "Pipeline", "bullets": ["Built a documented pipeline."]},
+          ]}], "skills": {"Languages": ["Python"]}}
+    provider = RepairingProvider()
+    result = asyncio.run(tailor_resume(cv, {"resume_language": "en"}, provider))
+
+    assert provider.temperatures == [0.45, 0.25]
+    assert "section:0:item:0" in provider.tasks[1]
+    assert "python" in provider.tasks[1].casefold()
+    assert result["sections"][0]["items"][0]["bullets"] == ["Built a documented pipeline."]

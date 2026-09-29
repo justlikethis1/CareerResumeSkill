@@ -513,7 +513,17 @@ def _ensure_heading_keep_next(
         style_id = style_node.get(_tag(W_NS, "val"), "") if style_node is not None else ""
         style = style_catalog.get(style_id, {})
         label = f"{style_id} {style.get('name', '')}".casefold()
-        if not any(marker in label for marker in ("heading", "title", "subtitle")):
+        paragraph_text = "".join(
+            node.text or "" for node in paragraph.iter(_tag(W_NS, "t"))
+        ).strip()
+        text_heading = (
+            len(paragraph_text) <= 60
+            and paragraph_text == paragraph_text.upper()
+            and any(character.isalpha() for character in paragraph_text)
+        )
+        if not text_heading and not any(
+            marker in label for marker in ("heading", "title", "subtitle")
+        ):
             continue
         if properties is None:
             properties = ET.Element(_tag(W_NS, "pPr"))
@@ -674,18 +684,25 @@ def _sanitize_pdf_dash_fillers(pdf_path: Path) -> Path:
         return pdf_path
     writer = PdfWriter(clone_from=str(pdf_path))
     changed = False
-    pattern = re.compile(rb"\[\(-{2,}\)\]\s*TJ")
+    array_pattern = re.compile(
+        rb"\[((?:\s*\(-+\)\s*|\s*-?\d+(?:\.\d+)?\s*)+)\]\s*TJ"
+    )
+
+    def strip_dash_array(match: re.Match[bytes]) -> bytes:
+        body = match.group(1)
+        dash_count = sum(len(token) - 2 for token in re.findall(rb"\(-+\)", body))
+        return b" " if dash_count >= 2 else match.group(0)
+
     for page in writer.pages:
         contents = page.get_contents()
         if contents is not None:
             raw = contents.get_data()
-            cleaned = pattern.sub(b"", raw)
+            cleaned = array_pattern.sub(strip_dash_array, raw)
             if cleaned != raw:
                 stream = DecodedStreamObject()
                 stream.set_data(cleaned)
                 page.replace_contents(stream)
                 changed = True
-        writer.add_page(page)
     if not changed:
         return pdf_path
     temporary = pdf_path.with_name(f".{pdf_path.name}.sanitized.tmp")

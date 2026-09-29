@@ -4,6 +4,7 @@ import pytest
 
 from career_resume_skill import latex
 from career_resume_skill.latex import (
+    PageLimitError,
     compile_latex,
     escape_latex,
     find_compiler,
@@ -11,6 +12,18 @@ from career_resume_skill.latex import (
     render_template,
 )
 from career_resume_skill.quality import extract_pdf_text
+
+
+def test_page_limit_error_exposes_structured_context() -> None:
+    error = PageLimitError(2, 1, "log excerpt")
+
+    assert error.to_dict() == {
+        "error": "PageLimitError",
+        "message": "Rendered PDF has 2 pages; limit is 1",
+        "pages": 2,
+        "limit": 1,
+        "log": "log excerpt",
+    }
 
 
 def test_escape_latex_special_characters() -> None:
@@ -55,7 +68,10 @@ def test_render_cover_letter_escapes_content_and_requires_date(tmp_path: Path) -
         {
             "name": "A&B",
             "contact": {"email": "a_b@example.com"},
-            "date": "2026-09-24",
+            "date": "September 24, 2026",
+            "recipient_title": "Hiring Committee",
+            "company_name": "Example & Co",
+            "subject_line": "RE: Application for AI Research - A&B",
             "salutation": "Dear Hiring Team,",
             "paragraphs": ["A&B 38%", "C++ and C_CUDA", "Motivation $5 #1"],
             "closing": "Sincerely",
@@ -168,7 +184,8 @@ def test_business_letter_and_resume_compile_to_extractable_single_page(tmp_path:
         }]}], "skills": {},
     }, tmp_path / "resume.tex")
     cover = render_template("cover_letter", {
-        "name": "Candidate", "contact": contact, "date": "2026-09-26",
+        "name": "Candidate", "contact": contact, "date": "September 26, 2026",
+        "recipient_title": "Hiring Committee", "subject_line": "RE: Application for Software Engineering - Candidate",
         "company_name": "Acme & Co", "salutation": "Dear Hiring Team,",
         "paragraphs": ["My Python experience fits this role.",
                        "I improved accuracy by 5.2% using verified Python tools.",
@@ -179,12 +196,17 @@ def test_business_letter_and_resume_compile_to_extractable_single_page(tmp_path:
 
     assert r"Acme \& Co" in rendered_cover
     assert r"{\bfseries Date:}" in rendered_cover
-    assert r"{\bfseries To:} Hiring Team" in rendered_cover
+    assert r"{\bfseries To:} Hiring Committee" in rendered_cover
+    assert r"RE: Application for Software Engineering - Candidate" in rendered_cover
+    assert r"\csname textbf\endcsname{Candidate}" in rendered_cover
     for tex in (resume, cover):
         pdf = compile_latex(tex, page_limit=1)
         pages, text = extract_pdf_text(pdf["pdf_path"])
         assert pages == 1
         assert "5.2%" in text
+        if tex == cover:
+            assert "extbf" not in text
+            assert "Candidate" in text
         if tex == resume:
             assert "10⁻⁶" in text
             assert "1.2μs" in text

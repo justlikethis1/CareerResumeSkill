@@ -9,21 +9,28 @@
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{<% if compact == 0 %>9<% else %>6<% endif %>pt}
 \begin{document}
-\begin{center}
-{\Large\bfseries << name >>}\\[0.4em]
-{\small <% if contact.get('phone') %><< contact.phone >> $\vert$ <% endif %><< contact.email >><% if contact.get('location') %> $\vert$ << contact.location >><% endif %><% if contact.get('linkedin') %> $\vert$ \href{<< contact.linkedin >>}{LinkedIn}<% endif %><% if contact.get('github') %> $\vert$ \href{<< contact.github >>}{GitHub}<% endif %>}
-\end{center}
-\vspace{0.3em}\hrule\vspace{0.9em}
-{\bfseries Date:} << date >>\\[0.6em]
-{\bfseries To:} Hiring Team<% if company_name is defined and company_name %>\\
-<< company_name >><% endif %>
+\begin{flushright}
+{\Large\bfseries << name >>}\\[0.25em]
+{\small <% if contact.get('email') %><< contact.email >><% endif %><% if contact.get('phone') %> $\vert$ << contact.phone >><% endif %><% if contact.get('location') %> $\vert$ << contact.location >><% endif %>}
+\end{flushright}
+\vspace{-0.6em}
+\begin{flushleft}
+{\bfseries Date:} << date >>\\[0.45em]
+{\bfseries To:} << recipient_title >>\\
+<< company_name >>
+\end{flushleft}
 
-\vspace{0.8em}
+\vspace{0.25em}
+{\large\bfseries << subject_line >>}\\[-0.25em]
+\rule{\textwidth}{0.4pt}
+\vspace{0.35em}
 
 << salutation >>
 
 <% for paragraph in paragraphs %><< paragraph >>
 
-<% endfor %>\vspace{0.5em}
-<< closing >>
+<% endfor %><< closing >>,\\
+\vspace{22pt}
+\csname textbf\endcsname{<< name >>}<% if contact.get('linkedin') or contact.get('github') %>\\
+{\small <% if contact.get('linkedin') %>\href{<< contact.linkedin >>}{LinkedIn}<% endif %><% if contact.get('linkedin') and contact.get('github') %> $\vert$ <% endif %><% if contact.get('github') %>\href{<< contact.github >>}{GitHub}<% endif %>}<% endif %>
 \end{document}

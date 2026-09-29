@@ -32,6 +32,28 @@ def test_cover_letter_critic_detects_dangling_candidate_opening() -> None:
     assert any("dangling_opening" in issue for issue in result.issues)
 
 
+def test_cover_letter_critic_ngram_size_is_configurable() -> None:
+    paragraphs = [
+        "I build reliable inference pipelines for model serving.",
+        "I build reliable inference pipelines for model serving.",
+    ]
+
+    assert CoverLetterCritic.audit(paragraphs, ngram_size=6).passed is False
+    assert CoverLetterCritic.audit(paragraphs, ngram_size=9).passed is True
+
+
+def test_cover_letter_critic_flags_buzzwords_and_long_sentences_without_substring_matches() -> None:
+    result = CoverLetterCritic.audit([
+        "I am passionate about technical delivery and excited by this role.",
+        "I measured pipeline throughput and reduced latency using verified evidence across several production systems with careful engineering decisions and reproducible validation under changing workload conditions.",
+        "I welcome a technical discussion about this work.",
+    ])
+    assert any("excessive_buzzwords: passionate, excited" in issue for issue in result.issues)
+    long_sentence = " ".join(["Measured pipeline throughput"] * 10) + "."
+    assert any("low_readability:" in issue for issue in CoverLetterCritic.audit([long_sentence]).issues)
+    assert CoverLetterCritic.audit(["I expressed the result."]).passed
+
+
 def test_docx_critic_detects_trailing_fillers() -> None:
     result = DocxCritic.audit_bullets(["Measured latency.", "Built a pipeline.-----"])
 

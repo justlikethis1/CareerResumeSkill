@@ -50,11 +50,26 @@ def test_golden_docx_application_package(tmp_path: Path, role: str, jd: str) -> 
     assert not re.search(r"(?:--|[—–])\s*$", pdf_text, flags=re.MULTILINE)
     assert len(package["cover_letter"]["paragraphs"]) == 3
     cover_text = Path(package["cover_letter_text_path"]).read_text(encoding="utf-8")
-    assert cover_text.split("\n\n")[1:4] == package["cover_letter"]["paragraphs"]
-    assert "**Date**: 2026-04-08" in Path(package["cover_letter_md_path"]).read_text(encoding="utf-8")
-    assert "2026-04-08" in cover_pdf_text
+    assert "Date: April 8, 2026" in cover_text
+    assert "Hiring Committee\n" + f"Example {role}" in cover_text
+    assert "RE: Application for " in cover_text
+    assert "Sincerely,\n\n\n\nCandidate" in cover_text
+    assert "Date: April 8, 2026" in Path(package["cover_letter_md_path"]).read_text(encoding="utf-8")
+    assert "April 8, 2026" in cover_pdf_text
     assert package["preflight"]["passed"]
     assert package["quality_report"]["integrity_linter"]["passed"]
+    assert package["verified"] == (
+        package["quality_report"]["integrity_linter"]["passed"]
+        and all(
+            package["quality_report"][name]["passed"]
+            for name in (
+                "cover_letter_critic", "cover_letter_content_critic",
+                "resume_content_critic", "docx_critic",
+            )
+        )
+    )
+    if not package["verified"]:
+        assert package["ledger_entry"] is None
     typography = package["quality_report"]["typography_audit"]
     assert typography["final_page_count"] == 1
     assert typography["cover_letter_word_count"] > 0

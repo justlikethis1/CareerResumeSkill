@@ -62,9 +62,9 @@ DOCX 注入还会经过 `docx_sanitizer.py`：词法层清理不可见字符和�
 
 JD 分析只注册 `analyze_job_description` 一个 MCP 工具；旧 `analyze_target_jd` 别名已移除。公网 URL 的每一跳都会重新校验 DNS 结果，并将连接固定到已校验的数值 IP，同时使用原 hostname 完成 TLS SNI/证书校验。
 
-申请包同时返回 `ats_report`（硬技能/优选词精确与语义覆盖、缺项）和 `fact_cards`（事实原文、技术词、已验证数字及 Evidence ID）。中文长句要求会保留在 `excluded_non_atomic_requirements` 审计字段中，不作为单个 ATS 关键词计分；直接 ATS 评分也会再次执行原子短语过滤，避免绕过应用层分析。DOCX 注入前每个 item 的 bullet 列表受 `item_bullet_budgets` 硬截断，fidelity 回退只做原地替换。ATS 分数是透明关键词覆盖启发式值，不代表任何商业 ATS 排名或录用概率，也不作为虚构补词的理由。PDF 交付前还会运行 Integrity Linter：单页预算、被引用证据中的指标不变性、未授权技术/高危黑名单、尾部破折号和私有区字形。
+申请包同时返回 `ats_report`（Resume + Cover Letter 的硬技能/优选词精确与语义覆盖、缺项，并保留 `resume_only` 子报告用于单独查看简历缺口）和 `fact_cards`（事实原文、技术词、已验证数字及 Evidence ID）。中文长句要求会保留在 `excluded_non_atomic_requirements` 审计字段中，不作为单个 ATS 关键词计分；直接 ATS 评分也会再次执行原子短语过滤，避免绕过应用层分析。DOCX 注入前每个 item 的 bullet 列表受 `item_bullet_budgets` 硬截断，fidelity 回退只做原地替换。ATS 分数是本申请包的透明关键词覆盖启发式值，不代表任何商业 ATS 排名或录用概率；现实 ATS 对求职信的计分权重各异，因此同时保留 Resume-only 子报告，且不会以虚构补词提升分数。PDF 交付前还会运行 Integrity Linter：单页预算、被引用证据中的指标不变性、未授权技术/高危黑名单、尾部破折号和私有区字形。
 
-求职信严格为三段；Pydantic 校验段落词数区间为 45-80、140-195、55-90，总计防御区间为 245-350 词，提示目标仍为 280-340 词。较低总下限与分段下限保持一致，避免边界词数因 1 个词波动反复重试；Cover Letter 字数不足时允许有限的额外修复尝试，但不会放宽段落结构、证据、技术和指标校验。申请包同时生成 UTF-8 纯文本和 Markdown，并分别通过 `cover_letter_text_path` 与 `cover_letter_md_path` 返回路径。示例配置在 `src/career_resume_skill/templates/few_shots.json`，技术词表在 `src/career_resume_skill/technology_terms.json`，高危术语在 `src/career_resume_skill/hallucination_blacklist.json`；修改配置后需通过 Schema/事实测试。新增岗位原型仍需扩展 Pydantic 的 `role_type` 枚举。
+求职信严格为三段；Pydantic 校验段落词数区间为 45-80、120-195、55-90，总计防御区间为 245-350 词，提示目标仍为 280-340 词。Cover Letter 字数不足时允许有限的额外修复尝试，但不会放宽段落结构、证据、技术和指标校验。申请包同时生成 UTF-8 纯文本和 Markdown，并分别通过 `cover_letter_text_path` 与 `cover_letter_md_path` 返回路径。模型生成的简历和求职信只对来源证据中出现的技术词规范大小写；词表在 `src/career_resume_skill/technology_terms.json`，不会把 JD 里的新工具加入候选人事实。求职信签名由模板排版，PDF 测试会拦截 `extbf` 字样泄漏。示例配置在 `src/career_resume_skill/templates/few_shots.json`，高危术语在 `src/career_resume_skill/hallucination_blacklist.json`；修改配置后需通过 Schema/事实测试。新增岗位原型仍需扩展 Pydantic 的 `role_type` 枚举。
 
 DOCX 申请包经历 `INGESTION → PROJECTION → GEOMETRIC_EVALUATION → DOCX_INJECTION → HEADLESS_VERIFICATION`；预渲染几何仅评估，不因单条偏长就截断。版式恢复采用保守的 level 0→1→2 自底向上试探：先保留原生样式，只有实际 PDF 超页才升级到 level 1，再必要时升级到 level 2，避免精简内容被过度压实。level 1 收紧继承段落间距与行距，level 2 使用 215 twips 行距并有界收缩上下页边距，同时保留标题 `keepNext` 和最小呼吸间距。视觉底部留白 3%~10% 视为舒适区；若严格 level 2 仍无法单页，仅允许放松标题额外间距作为可审计兜底，不放松证据、指标或页数门禁。随后才进入 `TARGETED_RE_RANKING`：优先选择可节省行数的 Tier 3/Tier 2 bullet，一次只缩短一条，再从原始 DOCX 注入并终验。若补丁丢失来源指标、已知技术、引入未经验证的数字、违反 Level 1 保真或没有减少占宽，则拒绝并保留原文。模型不可用时不伪造微调；重试仍非单页则阻断交付。`refinement` 返回状态轨迹。
 
@@ -240,7 +240,7 @@ items[].{title,organization,location,dates,bullets[]}
 5. 给渲染 payload 补齐 `name`、`company_name`、`date` 和 `contact`。
 6. 分别以 `resume`、`cover_letter` 调用 `render_and_compile_latex`。
 
-也可直接调用 `generate_application_package` 完成全部步骤。每次申请包都会返回唯一的 `run_id` 和 `run_dir`，PDF/LaTeX 产物写入独立目录，不会覆盖之前的投递版本。DOCX Track 的 `output_docx` 和同名 PDF 是权威 Golden Artifact；目录中不会保留 compact 中间候选。报告中的 `quality_report.typography_audit` 会记录 `final_page_count`、`applied_compact_level`、`line_spacing_twips`、`margins_adjusted`、`heading_protection_relaxed`、Cover Letter 词数和 `visual_density_score`。只有 `verified=true` 才表示最终 PDF 通过单页、指标、技术来源、黑名单、标点和字形门禁；失败结果仅供检查，不写入投递 Ledger。
+也可直接调用 `generate_application_package` 完成全部步骤。每次申请包都会返回唯一的 `run_id` 和 `run_dir`，PDF/LaTeX 产物写入独立目录，不会覆盖之前的投递版本。DOCX Track 的 `output_docx` 和同名 PDF 是权威 Golden Artifact；目录中不会保留 compact 中间候选。报告中的 `quality_report.typography_audit` 会记录 `final_page_count`、`applied_compact_level`、`line_spacing_twips`、`margins_adjusted`、`heading_protection_relaxed`、Cover Letter 词数和 `visual_density_score`。只有 `verified=true` 才表示最终 PDF 通过单页、指标、技术来源、黑名单、标点和字形门禁，且 Resume/Cover Letter 内容 Critic 全部通过；失败结果仅供检查，不写入投递 Ledger。
 
 路径说明：`.env` 中的 `CAREER_SKILL_OUTPUT_DIR` 会在配置加载时解析为绝对路径；CLI 报告、DOCX 资源、manifest、LaTeX 和 PDF 路径也会返回绝对路径，避免从不同工作目录启动时产物散落。
 

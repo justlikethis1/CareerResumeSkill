@@ -4,7 +4,7 @@ import asyncio
 import shutil
 import tempfile
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +16,9 @@ from .analysis import (
     filter_atomic_requirements,
 )
 from .artifacts import create_run_directory, slug
-from .assets import record_application
+from .assets import historical_gap_reminders, record_application
 from .ats import score_ats
-from .config import (
-    COVER_LETTER_HARD_MAX_WORDS,
-    COVER_LETTER_HARD_MIN_WORDS,
-    Settings,
-)
+from .config import Settings
 from .critic import CoverLetterCritic, DocxCritic, TextContentCritic
 from .docx_engine import (
     calculate_docx_layout_budget,
@@ -36,7 +32,13 @@ from .facts import build_fact_cards
 from .ingestion import resolve_jd_source
 from .latex import PageLimitError, compile_latex, prune_low_priority_resume, render_template
 from .llm import LLMProvider
-from .models import JDAnalysis, validate_jd_analysis, validate_master_cv
+from .models import (
+    COVER_LETTER_HARD_MAX_WORDS,
+    COVER_LETTER_HARD_MIN_WORDS,
+    JDAnalysis,
+    validate_jd_analysis,
+    validate_master_cv,
+)
 from .payload_cache import VerifiedPayloadCache, payload_cache_key
 from .quality import (
     document_quality_report,
@@ -70,6 +72,42 @@ def _candidate_text(candidate: dict[str, Any]) -> str:
     return " ".join(fact["text"] for fact in build_fact_cards(candidate))
 
 
+def _missing_ats_keywords(ats_report: dict[str, Any]) -> list[str]:
+    return list(dict.fromkeys(
+        [
+            *ats_report.get("hard_requirements", {}).get("missing", []),
+            *ats_report.get("preferred_keywords", {}).get("missing", []),
+        ]
+    ))
+
+
+def _failed_content_critics(report: dict[str, Any]) -> list[str]:
+    names = (
+        "cover_letter_critic", "cover_letter_content_critic",
+        "resume_content_critic", "docx_critic",
+    )
+    return [
+        name for name in names
+        if isinstance(report.get(name), dict) and not report[name].get("passed", False)
+    ]
+
+
+def _score_application_package(
+    jd_analysis: dict[str, Any],
+    resume: dict[str, Any],
+    cover_letter: dict[str, Any],
+) -> dict[str, Any]:
+    resume_report = score_ats(jd_analysis, _candidate_text(resume))
+    cover_text = " ".join(cover_letter.get("paragraphs", []))
+    package_report = score_ats(
+        jd_analysis,
+        f"{_candidate_text(resume)}\n{cover_text}",
+    )
+    package_report["scoring_scope"] = "resume_and_cover_letter"
+    package_report["resume_only"] = resume_report
+    return package_report
+
+
 def _source_text_for_evidence(master_cv: dict[str, Any], evidence_ids: set[str]) -> str:
     return " ".join(
         record.text
@@ -97,11 +135,80 @@ def _pdf_parseability(pdf_path: str) -> dict[str, Any]:
     }
 
 
-def _write_cover_letter_text(cover_letter: dict[str, Any], path: Path) -> str:
+def _cover_letter_metadata(
+    candidate_name: str,
+    company_name: str,
+    date_str: str,
+    contact: dict[str, Any],
+    jd_analysis: dict[str, Any],
+) -> dict[str, Any]:
+    role_titles = {
+        "ai_research": "AI Research",
+        "quant_fintech": "Quantitative Finance / FinTech",
+        "systems_infra": "Systems Engineering",
+        "data_engineering": "Data Engineering",
+        "general_software": "Software Engineering",
+    }
+    job_title = (
+        jd_analysis.get("job_title")
+        or jd_analysis.get("target_role")
+        or role_titles.get(jd_analysis.get("role_type"), "Software Engineering")
+    )
+    try:
+        parsed_date = date.fromisoformat(date_str)
+        date_display = f"{parsed_date:%B} {parsed_date.day}, {parsed_date.year}"
+    except ValueError:
+        date_display = date_str
+    return {
+        "name": candidate_name,
+        "company_name": company_name,
+        "date": date_display,
+        "recipient_title": "Hiring Committee",
+        "subject_line": f"RE: Application for {job_title} - {candidate_name}",
+        "contact": contact,
+    }
+
+
+def _closing_salutation(cover_letter: dict[str, Any]) -> str:
+    return cover_letter["closing"].splitlines()[0].strip().rstrip(",")
+
+
+def _write_cover_letter_text(
+    cover_letter: dict[str, Any], metadata: dict[str, Any], path: Path
+) -> str:
     paragraphs = cover_letter["paragraphs"]
     if len(paragraphs) != 3:
         raise ValueError("Cover letter must contain exactly three paragraphs")
-    text = "\n\n".join((cover_letter["salutation"], *paragraphs, cover_letter["closing"])) + "\n"
+    contact = metadata["contact"]
+    sender_contact = " | ".join(
+        value for value in (contact.get("email"), contact.get("phone"), contact.get("location"))
+        if value
+    )
+    personal_links = " | ".join(
+        f"{label}: {contact[key]}"
+        for key, label in (("linkedin", "LinkedIn"), ("github", "GitHub"))
+        if contact.get(key)
+    )
+    lines = [
+        metadata["name"],
+        sender_contact,
+        f"Date: {metadata['date']}",
+        "",
+        metadata["recipient_title"],
+        metadata["company_name"],
+        "",
+        metadata["subject_line"],
+        "=" * len(metadata["subject_line"]),
+        "",
+        cover_letter["salutation"],
+        "",
+    ]
+    for paragraph in paragraphs:
+        lines.extend((paragraph, ""))
+    lines.extend((f"{_closing_salutation(cover_letter)},", "", "", "", metadata["name"]))
+    if personal_links:
+        lines.extend((personal_links,))
+    text = "\n".join(lines).rstrip() + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return str(path.resolve())
@@ -109,12 +216,10 @@ def _write_cover_letter_text(cover_letter: dict[str, Any], path: Path) -> str:
 
 def _write_cover_letter_markdown(
     cover_letter: dict[str, Any],
-    candidate_name: str,
-    company_name: str,
-    date_str: str,
-    contact: dict[str, Any],
+    metadata: dict[str, Any],
     path: Path,
 ) -> str:
+    contact = metadata["contact"]
     contact_parts = [
         value
         for value in (
@@ -129,11 +234,14 @@ def _write_cover_letter_markdown(
     contact_line = " | ".join(contact_parts)
     paragraphs = cover_letter["paragraphs"]
     lines = [
-        f"# Cover Letter — {candidate_name}",
-        f"**Target Company**: {company_name}  ",
-        f"**Date**: {date_str}  ",
-        f"**Contact**: {contact_line}" if contact_line else "",
+        f"# Cover Letter — {metadata['name']}",
+        contact_line,
+        f"Date: {metadata['date']}",
         "",
+        metadata["recipient_title"],
+        metadata["company_name"],
+        "",
+        f"**{metadata['subject_line']}**",
         "---",
         "",
         cover_letter["salutation"],
@@ -144,8 +252,19 @@ def _write_cover_letter_markdown(
         "",
         paragraphs[2],
         "",
-        cover_letter["closing"].replace("\n", "  \n"),
+        f"{_closing_salutation(cover_letter)},",
+        "",
+        "",
+        "",
+        f"**{metadata['name']}**",
     ]
+    personal_links = " | ".join(
+        f"[{label}]({contact[key]})"
+        for key, label in (("linkedin", "LinkedIn"), ("github", "GitHub"))
+        if contact.get(key)
+    )
+    if personal_links:
+        lines.extend((personal_links,))
     md_content = "\n".join(line for line in lines if line is not None).strip() + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(md_content, encoding="utf-8")
@@ -213,6 +332,10 @@ class ApplicationService:
                     if paragraph_id in paragraph_budgets
                 ]
         validated_jd["item_bullet_budgets"] = item_budgets
+        validated_jd["historical_gap_reminders"] = historical_gap_reminders(
+            Path(self.settings.output_dir) / ".career_ledger.json",
+            validated_jd.get("role_type"),
+        )
         result = await tailor_resume(
             validated_cv.model_dump(), validated_jd, self.provider
         )
@@ -437,21 +560,24 @@ class ApplicationService:
         )
         letter_date = application_date or datetime.now().astimezone().date().isoformat()
         candidate_facts = build_fact_cards(tailored_cv)
-        ats_report = score_ats(jd_analysis, _candidate_text(tailored_cv))
+        ats_report = _score_application_package(jd_analysis, tailored_cv, cover_letter)
         source_pdf_dir = Path(output_docx).expanduser().resolve().parent / "source-baseline"
-        source_pdf = await self.convert_docx_to_pdf(docx_source, str(source_pdf_dir))
+        cover_metadata = _cover_letter_metadata(
+            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis
+        )
         cover_payload = {
             **cover_letter,
-            "name": tailored_cv["name"],
-            "company_name": company_name,
-            "date": letter_date,
-            "contact": tailored_cv["contact"],
+            **cover_metadata,
+            "closing": _closing_salutation(cover_letter),
         }
-        cover_pdf = await self.render_and_compile_latex(
-            "cover_letter",
-            cover_payload,
-            page_limit=1,
-            output_dir=Path(output_docx).expanduser().resolve().parent,
+        source_pdf, cover_pdf = await asyncio.gather(
+            self.convert_docx_to_pdf(docx_source, str(source_pdf_dir)),
+            self.render_and_compile_latex(
+                "cover_letter",
+                cover_payload,
+                page_limit=1,
+                output_dir=Path(output_docx).expanduser().resolve().parent,
+            ),
         )
         quality_report = await asyncio.to_thread(
             document_quality_report,
@@ -484,21 +610,25 @@ class ApplicationService:
             bullet_texts=bullet_texts,
             source_technology_text=_candidate_text(imported["master_cv"]),
         )
-        delivery_verified = integrity_report["passed"]
+        failed_critics = _failed_content_critics(quality_report)
+        delivery_verified = integrity_report["passed"] and not failed_critics
         delivery_warning = None if delivery_verified else (
             "Resume package was generated for inspection but did not pass final verification: "
-            f"{integrity_report}"
+            f"integrity={integrity_report['passed']}; failed_critics={failed_critics}"
         )
-        cover_text_path = _write_cover_letter_text(
-            cover_letter, Path(output_docx).with_name(f"{Path(output_docx).stem}-cover-letter.txt")
-        )
-        cover_md_path = _write_cover_letter_markdown(
-            cover_letter,
-            imported["master_cv"]["name"],
-            company_name,
-            letter_date,
-            imported["master_cv"].get("contact", {}),
-            Path(output_docx).with_name(f"{Path(output_docx).stem}-cover-letter.md"),
+        cover_text_path, cover_md_path = await asyncio.gather(
+            asyncio.to_thread(
+                _write_cover_letter_text,
+                cover_letter,
+                cover_metadata,
+                Path(output_docx).with_name(f"{Path(output_docx).stem}-cover-letter.txt"),
+            ),
+            asyncio.to_thread(
+                _write_cover_letter_markdown,
+                cover_letter,
+                cover_metadata,
+                Path(output_docx).with_name(f"{Path(output_docx).stem}-cover-letter.md"),
+            ),
         )
         ledger_entry = None
         if delivery_verified:
@@ -509,6 +639,8 @@ class ApplicationService:
                 pdf["pdf_path"],
                 ats_report["score"],
                 [item_id for item_id, budget in item_budgets.items() if budget["tier"] == "tier_1"],
+                role_type=jd_analysis.get("role_type"),
+                missing_keywords=_missing_ats_keywords(ats_report),
             )
         if cache and (cached is None or refinement.get("page_retry", {}).get("outcome") == "patch_accepted"):
             cache.store(cache_key, tailored_cv)
@@ -668,7 +800,7 @@ class ApplicationService:
         )
         documents: dict[str, Any] = {}
         candidate_facts = build_fact_cards(tailored_cv)
-        ats_report = score_ats(jd_analysis, _candidate_text(tailored_cv))
+        ats_report = _score_application_package(jd_analysis, tailored_cv, cover_letter)
         delivery_verified: bool | None = None
         delivery_warning: str | None = None
         ats_report["rewrite_fidelity"] = tailored_cv.get("strategy", {}).get(
@@ -677,30 +809,36 @@ class ApplicationService:
         run_id, run_dir = create_run_directory(
             self.settings.output_dir, tailored_cv["name"], company_name
         )
+        letter_date = application_date or datetime.now().astimezone().date().isoformat()
+        cover_metadata = _cover_letter_metadata(
+            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis
+        )
         if compile_documents:
             resume_payload = {**tailored_cv, "company_name": company_name}
             cover_payload = {
                 **cover_letter,
-                "name": tailored_cv["name"],
-                "company_name": company_name,
-                "date": application_date or datetime.now().astimezone().date().isoformat(),
-                "contact": tailored_cv["contact"],
+                **cover_metadata,
+                "closing": _closing_salutation(cover_letter),
             }
-            documents["resume"] = await self.render_and_compile_latex(
-                "resume", resume_payload, page_limit, output_dir=run_dir
+            resume_document, cover_document = await asyncio.gather(
+                self.render_and_compile_latex(
+                    "resume", resume_payload, page_limit, output_dir=run_dir
+                ),
+                self.render_and_compile_latex(
+                    "cover_letter", cover_payload, page_limit, output_dir=run_dir
+                ),
             )
+            documents["resume"] = resume_document
+            documents["cover_letter"] = cover_document
             final_resume_payload = documents["resume"].pop("rendered_content", resume_payload)
             tailored_cv = {
                 key: value for key, value in final_resume_payload.items()
                 if key != "company_name"
             }
             candidate_facts = build_fact_cards(tailored_cv)
-            ats_report = score_ats(jd_analysis, _candidate_text(tailored_cv))
+            ats_report = _score_application_package(jd_analysis, tailored_cv, cover_letter)
             ats_report["rewrite_fidelity"] = tailored_cv.get("strategy", {}).get(
                 "rewrite_fidelity", []
-            )
-            documents["cover_letter"] = await self.render_and_compile_latex(
-                "cover_letter", cover_payload, page_limit, output_dir=run_dir
             )
             ats_report["parseability"] = {
                 name: _pdf_parseability(document["pdf_path"])
@@ -742,7 +880,8 @@ class ApplicationService:
             ats_report["resume_content_critic"] = TextContentCritic.audit_resume(
                 resume_bullets
             ).to_dict()
-            delivery_verified = ats_report["integrity_linter"]["passed"]
+            failed_critics = _failed_content_critics(ats_report)
+            delivery_verified = ats_report["integrity_linter"]["passed"] and not failed_critics
             if delivery_verified:
                 ats_report["ledger_entry"] = record_application(
                     Path(self.settings.output_dir) / ".career_ledger.json",
@@ -753,23 +892,29 @@ class ApplicationService:
                     [item_id for item_id, budget in allocate_item_bullet_budgets(
                         master_cv_json, jd_analysis
                     ).items() if budget["tier"] == "tier_1"],
+                    role_type=jd_analysis.get("role_type"),
+                    missing_keywords=_missing_ats_keywords(ats_report),
                 )
             else:
                 delivery_warning = (
                     "Compiled application was generated for inspection but did not pass final "
-                    f"verification: {ats_report['integrity_linter']}"
+                    f"verification: integrity={ats_report['integrity_linter']['passed']}; "
+                    f"failed_critics={failed_critics}"
                 )
                 ats_report["ledger_entry"] = None
-        cover_text_path = _write_cover_letter_text(
-            cover_letter, run_dir / f"{slug(tailored_cv['name'])}_Cover_Letter_{slug(company_name)}.txt"
-        )
-        cover_md_path = _write_cover_letter_markdown(
-            cover_letter,
-            tailored_cv["name"],
-            company_name,
-            application_date or datetime.now().astimezone().date().isoformat(),
-            tailored_cv.get("contact", {}),
-            run_dir / f"{slug(tailored_cv['name'])}_Cover_Letter_{slug(company_name)}.md",
+        cover_text_path, cover_md_path = await asyncio.gather(
+            asyncio.to_thread(
+                _write_cover_letter_text,
+                cover_letter,
+                cover_metadata,
+                run_dir / f"{slug(tailored_cv['name'])}_Cover_Letter_{slug(company_name)}.txt",
+            ),
+            asyncio.to_thread(
+                _write_cover_letter_markdown,
+                cover_letter,
+                cover_metadata,
+                run_dir / f"{slug(tailored_cv['name'])}_Cover_Letter_{slug(company_name)}.md",
+            ),
         )
         return {
             "run_id": run_id,

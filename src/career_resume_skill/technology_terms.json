@@ -1,5 +1,5 @@
 [
-  "Python", "C++", "C++20", "PyTorch", "TensorRT", "CUDA", "FastAPI", "BERT",
+  "Python", "C++", "C++20", "PyTorch", "TensorRT", "CUDA", "FastAPI", "BERT", "SlimMCP", "Model Context Protocol", "GitHub",
   "Multi-Agent", "Multi-Agent Systems", "LLM Reasoning", "LLM-Driven Reasoning",
   "DPO", "RLHF", "SFT", "PPO", "GRPO", "RLAIF", "Preference Alignment",
   "Supervised Fine-Tuning", "Supervised Finetuning", "Supervised Fine Tuning",

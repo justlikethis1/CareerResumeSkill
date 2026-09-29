@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 from career_resume_skill.analysis import analyze_job_description_local
+from career_resume_skill.application import _closing_salutation
 from career_resume_skill.config import Settings
 from career_resume_skill.latex import render_template
 from career_resume_skill.llm import DeepSeekClient
@@ -30,7 +31,10 @@ def test_fallback_pipeline_renders_both_documents(tmp_path: Path) -> None:
         "name": tailored["name"],
         "company_name": "Target Company",
         "date": "September 24, 2026",
+        "recipient_title": "Hiring Committee",
+        "subject_line": "RE: Application for AI Research - Candidate",
         "contact": tailored["contact"],
+        "closing": _closing_salutation(cover),
     }
     cover_path = render_template("cover_letter", cover_payload, tmp_path / "cover.tex")
 

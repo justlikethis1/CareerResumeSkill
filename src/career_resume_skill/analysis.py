@@ -198,7 +198,13 @@ REQUIREMENT_ALIASES: dict[str, tuple[str, ...]] = {
     "Reinforcement Learning from Human Feedback": ("RLHF",),
     "RLHF": ("reinforcement learning from human feedback",),
     "reliable inference pipelines": ("reliable inference pipeline",),
+    "reliable inference pipeline": ("reliable inference pipelines",),
     "reproducible training workflows": ("reproducible training workflow",),
+    "reproducible training workflow": ("reproducible training workflows",),
+    "training pipelines": ("training pipeline",),
+    "training pipeline": ("training pipelines",),
+    "measured inference latency": ("measured inference latencies",),
+    "measured inference latencies": ("measured inference latency",),
 }
 
 

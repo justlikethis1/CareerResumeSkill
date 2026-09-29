@@ -10,6 +10,7 @@ secrets/
 *.secret
 output/
 .career_ledger.json
+.*.json.lock
 .tools/
 # Private candidate resume and JD source files; do not publish these fixtures.
 test/

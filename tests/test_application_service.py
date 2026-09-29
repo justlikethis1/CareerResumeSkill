@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from career_resume_skill.application import ApplicationService
+from career_resume_skill.application import (
+    ApplicationService,
+    _failed_content_critics,
+    _score_application_package,
+)
 from career_resume_skill.cli import _parser, _read_inputs
 from career_resume_skill.config import Settings
 from career_resume_skill.latex import PageLimitError
@@ -300,6 +304,14 @@ def test_docx_package_returns_cover_letter_and_reports_when_resume_overflows(
     assert package["ledger_entry"] is None
 
 
+def test_delivery_gate_includes_failed_content_critics() -> None:
+    assert _failed_content_critics({
+        "cover_letter_critic": {"passed": False, "issues": ["cross_paragraph_repetition"]},
+        "resume_content_critic": {"passed": True},
+    }) == ["cover_letter_critic"]
+    assert not _failed_content_critics({"cover_letter_critic": {"passed": True}})
+
+
 def test_application_runs_get_unique_output_directories(tmp_path: Path) -> None:
     master_cv = json.loads(Path("examples/master_cv.json").read_text(encoding="utf-8"))
     service = ApplicationService(
@@ -328,7 +340,8 @@ def test_application_runs_get_unique_output_directories(tmp_path: Path) -> None:
     assert Path(first["run_dir"]).is_dir()
     assert Path(second["run_dir"]).is_dir()
     cover_text = Path(first["cover_letter_text_path"]).read_text(encoding="utf-8")
-    assert cover_text.split("\n\n")[1:4] == first["cover_letter"]["paragraphs"]
+    assert first["cover_letter"]["paragraphs"][0] in cover_text
+    assert "RE: Application for AI Research - Candidate" in cover_text
 
 
 def test_offline_tailoring_preserves_docx_source_item_id() -> None:
@@ -420,3 +433,31 @@ def test_chinese_docx_requires_model_before_reading_input(tmp_path: Path) -> Non
             str(tmp_path / "missing.docx"), "JD", str(tmp_path / "output.docx"),
             "Example", resume_language="zh_CN",
         ))
+
+
+def test_application_ats_score_includes_cover_letter_and_preserves_resume_subscore() -> None:
+    jd_analysis = {
+        "must_haves": ["reliable inference pipelines"],
+        "hard_skills": [],
+        "nice_to_haves": [],
+        "ats_keywords": [],
+    }
+    resume = {
+        "name": "Candidate",
+        "contact": {"email": "candidate@example.com"},
+        "sections": [],
+        "skills": {},
+    }
+    cover_letter = {
+        "paragraphs": [
+            "I built a reliable inference pipeline supported by measured evaluation.",
+        ]
+    }
+
+    report = _score_application_package(jd_analysis, resume, cover_letter)
+
+    assert report["scoring_scope"] == "resume_and_cover_letter"
+    assert report["hard_requirements"]["missing"] == []
+    assert report["resume_only"]["hard_requirements"]["missing"] == [
+        "reliable inference pipelines",
+    ]

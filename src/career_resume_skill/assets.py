@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -27,25 +28,39 @@ def _json_file_lock(path: Path, timeout_seconds: float = 15.0):
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f".{path.name}.lock")
     deadline = time.monotonic() + timeout_seconds
-    while True:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(descriptor)
-            break
-        except FileExistsError:
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+        else:
+            import fcntl
+
+        while True:
             try:
-                if time.time() - lock_path.stat().st_mtime > timeout_seconds:
-                    lock_path.unlink(missing_ok=True)
-                    continue
-            except FileNotFoundError:
-                continue
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for JSON lock: {lock_path}")
-            time.sleep(0.05)
-    try:
-        yield
-    finally:
-        lock_path.unlink(missing_ok=True)
+                lock_file.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                if error.errno not in {errno.EACCES, errno.EAGAIN} and getattr(error, "winerror", None) != 33:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for JSON lock: {lock_path}") from error
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def append_experience(
@@ -97,6 +112,9 @@ def record_application(
     pdf_path: str | Path,
     ats_score: int,
     hero_item_ids: list[str],
+    *,
+    role_type: str | None = None,
+    missing_keywords: list[str] | None = None,
 ) -> dict[str, Any]:
     pdf = Path(pdf_path).expanduser().resolve(strict=True)
     digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
@@ -112,9 +130,52 @@ def record_application(
             "pdf_sha256": digest,
             "ats_score": ats_score,
             "hero_item_ids": hero_item_ids,
+            "role_type": role_type,
+            "missing_keywords": list(dict.fromkeys(missing_keywords or [])),
         }
         if any(entry.get("pdf_sha256") == digest and entry.get("company") == company for entry in entries):
             return record
         entries.append(record)
         _write_json(path, entries)
         return record
+
+
+def historical_gap_reminders(
+    ledger_path: str | Path,
+    role_type: str | None,
+    *,
+    low_score_threshold: int = 75,
+    limit: int = 8,
+) -> list[str]:
+    """Return same-role historical ATS gaps as evidence-gated review reminders only."""
+    if not role_type or limit <= 0:
+        return []
+    path = Path(ledger_path).expanduser().resolve()
+    with _json_file_lock(path):
+        if not path.is_file():
+            return []
+        try:
+            records = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+    if not isinstance(records, list):
+        return []
+    reminders: list[str] = []
+    for record in reversed(records):
+        if not isinstance(record, dict):
+            continue
+        if record.get("role_type") != role_type:
+            continue
+        try:
+            score = int(record.get("ats_score", 100))
+        except (TypeError, ValueError):
+            continue
+        if score >= low_score_threshold:
+            continue
+        for term in record.get("missing_keywords", []):
+            normalized = str(term).strip()
+            if normalized and normalized not in reminders:
+                reminders.append(normalized)
+                if len(reminders) >= limit:
+                    return reminders
+    return reminders

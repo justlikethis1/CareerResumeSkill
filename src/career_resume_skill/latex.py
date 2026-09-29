@@ -168,3 +168,12 @@ class PageLimitError(RuntimeError):
         self.pages = pages
         self.limit = limit
         self.log = log
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error": type(self).__name__,
+            "message": str(self),
+            "pages": self.pages,
+            "limit": self.limit,
+            "log": self.log,
+        }

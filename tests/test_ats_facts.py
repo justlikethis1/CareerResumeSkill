@@ -6,6 +6,19 @@ from career_resume_skill.facts import (
     extract_technologies,
     normalize_technology,
 )
+from career_resume_skill.text_utils import normalize_technology_casing
+
+
+def test_casing_normalization_respects_source_and_symbol_boundaries() -> None:
+    source = "PyTorch, C++, GitHub, SlimMCP and Model Context Protocol."
+    generated = (
+        "pytorch, PYTORCH, c++, c++20, github, slimmcp, model context protocol, "
+        "tensorflow and mygithub."
+    )
+    assert normalize_technology_casing(generated, source) == (
+        "PyTorch, PyTorch, C++, c++20, GitHub, SlimMCP, Model Context Protocol, "
+        "tensorflow and mygithub."
+    )
 
 
 def test_ats_report_separates_exact_semantic_and_missing_terms() -> None:
@@ -167,6 +180,20 @@ def test_ats_accepts_supported_singular_pipeline_and_workflow_phrasing() -> None
     )
 
     assert report["hard_requirements"]["missing"] == []
+
+
+def test_ats_pipeline_aliases_are_bidirectional_for_phrase_variants() -> None:
+    singular = score_ats(
+        {"must_haves": ["training pipelines"], "hard_skills": [], "nice_to_haves": [], "ats_keywords": []},
+        "Built a reproducible training pipeline.",
+    )
+    plural = score_ats(
+        {"must_haves": ["reliable inference pipeline"], "hard_skills": [], "nice_to_haves": [], "ats_keywords": []},
+        "Built reliable inference pipelines.",
+    )
+
+    assert singular["hard_requirements"]["missing"] == []
+    assert plural["hard_requirements"]["missing"] == []
 
 
 def test_hallucination_blacklist_does_not_flag_x_ray_as_ray_framework() -> None:

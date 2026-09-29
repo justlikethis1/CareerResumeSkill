@@ -581,7 +581,22 @@ def test_heading_gets_minimum_after_spacing_without_replacing_paragraph_boundary
     next_paragraph = result.paragraphs[1]
     assert heading.text == "PROJECT EXPERIENCE"
     assert next_paragraph.text == "Finance_Helper"
-    assert heading.paragraph_format.space_after.pt >= 4
+    assert heading.paragraph_format.space_after.pt >= 6
+
+
+def test_uppercase_section_heading_with_generic_style_gets_separation(tmp_path: Path) -> None:
+    source = tmp_path / "generic-heading.docx"
+    output = tmp_path / "generic-heading-output.docx"
+    document = Document()
+    document.add_paragraph("PROJECT EXPERIENCE")
+    document.add_paragraph("Finance_Helper", style="Heading 2")
+    document.save(source)
+
+    inject_docx_bullet_groups(source, output, {})
+
+    result = Document(output)
+    assert result.paragraphs[0].paragraph_format.space_after.twips >= 120
+    assert result.paragraphs[1].text == "Finance_Helper"
 
 
 def test_deep_compact_spacing_applies_global_line_pitch_and_margin_floor(tmp_path: Path) -> None:
@@ -683,21 +698,24 @@ def test_clean_replacement_text_removes_padding_not_valid_hyphens() -> None:
 
 
 def test_sanitize_pdf_dash_fillers_removes_only_standalone_dash_objects(tmp_path: Path) -> None:
-    from pypdf import PdfWriter
+    from pypdf import PdfReader, PdfWriter
     from pypdf.generic import DecodedStreamObject
 
     pdf = tmp_path / "dash.pdf"
     writer = PdfWriter()
     page = writer.add_blank_page(width=100, height=100)
     stream = DecodedStreamObject()
-    stream.set_data(b"BT [(normal-text)] TJ [(-----)] TJ ET")
+    stream.set_data(b"BT [(normal-text)] TJ [(-----)] TJ [(-)7(-)7(-)7(-)-3(-)] TJ ET")
     page.replace_contents(stream)
     with pdf.open("wb") as stream:
         writer.write(stream)
+    original_page_count = len(PdfReader(str(pdf)).pages)
 
     _sanitize_pdf_dash_fillers(pdf)
 
     assert b"-----" not in pdf.read_bytes()
+    assert b"normal-text" in pdf.read_bytes()
+    assert len(PdfReader(str(pdf)).pages) == original_page_count
 
 
 def test_deduplicate_pdf_pages_removes_adjacent_exact_text_duplicate(tmp_path: Path) -> None:

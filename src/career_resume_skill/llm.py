@@ -170,10 +170,13 @@ class DeepSeekClient:
         max_attempts = 2
         while attempt < max_attempts:
             content = ""
+            retry_temperature = max(0.1, temperature - (attempt * 0.15))
+            retry_top_p = max(0.7, 0.95 - (attempt * 0.05))
             try:
                 response = await self._client.chat.completions.create(
                     model=self.settings.model,
-                    temperature=temperature,
+                    temperature=retry_temperature,
+                    top_p=retry_top_p,
                     response_format={"type": "json_object"},
                     messages=messages,
                 )

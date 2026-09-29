@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,9 @@ from .config import Settings
 
 
 def find_libreoffice() -> str | None:
+    configured = os.getenv("LIBREOFFICE_PATH", "").strip()
     candidates = [
+        str(Path(configured).expanduser()) if configured else None,
         shutil.which("soffice"),
         shutil.which("libreoffice"),
         r"C:\Program Files\LibreOffice\program\soffice.exe",
@@ -24,7 +27,9 @@ def find_libreoffice() -> str | None:
 
 
 def find_tectonic() -> str | None:
+    configured = os.getenv("TECTONIC_PATH", "").strip()
     candidates = [
+        str(Path(configured).expanduser()) if configured else None,
         shutil.which("tectonic"),
         shutil.which("tectonic.exe"),
         str(Path.cwd() / ".tools/tectonic/tectonic.exe"),
@@ -37,12 +42,14 @@ def find_tectonic() -> str | None:
 
 
 def find_microsoft_word() -> str | None:
+    configured = os.getenv("MICROSOFT_WORD_PATH", "").strip()
     candidates = [
+        str(Path(configured).expanduser()) if configured else None,
         r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
         r"C:\Program Files (x86)\Microsoft Office\root\Office16\WINWORD.EXE",
     ]
     for candidate in candidates:
-        if Path(candidate).is_file():
+        if candidate and Path(candidate).is_file():
             return str(Path(candidate).resolve())
     return None
 

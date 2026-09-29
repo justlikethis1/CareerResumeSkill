@@ -6,11 +6,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-COVER_LETTER_TARGET_MIN_WORDS = 280
-COVER_LETTER_TARGET_MAX_WORDS = 340
-COVER_LETTER_HARD_MIN_WORDS = 245
-COVER_LETTER_HARD_MAX_WORDS = 350
-
 
 @dataclass(frozen=True)
 class Settings:

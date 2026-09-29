@@ -8,6 +8,14 @@ from typing import Any
 from .analysis import build_evidence_index
 from .models import MasterCV
 
+METRIC_UNITS = (
+    "tokens/s", "Mbps", "Gbps", "QPS", "RPS", "TPS", "IOPS", "kbps", "bps",
+    "MHz", "GHz", "GB", "TB", "MB", "KB", "μs", "ns", "ms", "us",
+    "min", "μm", "um", "h", "s", "%", "x", "°",
+)
+_METRIC_UNIT_PATTERN = "|".join(
+    re.escape(unit) for unit in sorted(METRIC_UNITS, key=len, reverse=True)
+)
 _METRIC_RE = re.compile(
     r"(?<![\w])"
     r"(?:sub\s*[-‐‑‒–—]\s*)?[+-]?"
@@ -16,7 +24,7 @@ _METRIC_RE = re.compile(
     r"(?:[kKmMgG])?"
     r"(?:\s*[-‐‑‒–—]?\s*bits?)?"
     r"(?:[×*]\s*10(?:[²³¹⁰-⁹\u207a\u207b\d+-]+)?)?"
-    r"(?:\s?(?:%|x|ms|us|μs|ns|s|min|h|GB|TB|MB|KB|MHz|GHz|μm|um|°|QPS|RPS|TPS|IOPS|bps|kbps|Mbps|Gbps|tokens/s))?"
+    rf"(?:\s?(?:{_METRIC_UNIT_PATTERN}))?"
     r"(?![\w])",
     re.IGNORECASE,
 )
