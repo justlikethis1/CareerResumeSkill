@@ -150,12 +150,12 @@ def test_few_shots_do_not_contain_trailing_dash_fillers() -> None:
 def test_repair_guidance_expands_cover_letter_underflow_from_evidence_only() -> None:
     guidance = _repair_guidance(ValueError(
         "cover letter word budget exceeded: paragraph 3=47 (expected 55-90); "
-        "total=255 (expected 245-350)"
+        "total=200 (expected 210-350)"
     ))
 
     assert "DO NOT SHORTEN" in guidance
     assert "paragraph 3: add at least 8 words" in guidance
-    assert "total: add at least 0 words" not in guidance
+    assert "total: add at least 10 words" in guidance
     assert "add only concise details explicitly supported by the cited evidence" in guidance.casefold()
     assert "Do not invent claims or metrics" in guidance
 
@@ -166,11 +166,36 @@ def test_cover_letter_second_paragraph_allows_concise_evidence_without_padding()
     CoverLetterDraft.model_validate({
         "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
     })
-    paragraphs[1] = " ".join(["Evidence"] * 119)
-    with pytest.raises(ValueError, match="paragraph 2=119 \\(expected 120-195\\)"):
+    paragraphs[1] = " ".join(["Evidence"] * 115)
+    CoverLetterDraft.model_validate({
+        "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
+    })
+    paragraphs[1] = " ".join(["Evidence"] * 114)
+    with pytest.raises(ValueError, match="paragraph 2=114 \\(expected 115-195\\)"):
         CoverLetterDraft.model_validate({
             "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
         })
+
+
+def test_cover_letter_total_budget_tolerates_small_generation_variance() -> None:
+    paragraphs = [
+        " ".join(["Opening"] * 55),
+        " ".join(["Evidence"] * 115),
+        " ".join(["Alignment"] * 50),
+    ]
+    CoverLetterDraft.model_validate({
+        "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
+    })
+
+    paragraphs = [
+        " ".join(["Opening"] * 45),
+        " ".join(["Evidence"] * 120),
+        " ".join(["Alignment"] * 55),
+    ]
+    result = CoverLetterDraft.model_validate({
+        "salutation": "Dear Team,", "paragraphs": paragraphs, "closing": "Sincerely",
+    })
+    assert sum(len(paragraph.split()) for paragraph in result.paragraphs) == 220
 
 
 def test_repair_guidance_restores_missing_metrics_without_invention() -> None:

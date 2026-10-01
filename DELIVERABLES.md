@@ -25,7 +25,7 @@ Use `--output-dir <directory>` to pin a run's generated reports and LaTeX artifa
 
 ## Verification status
 The current codebase is verified by the project test suite:
-- `pytest -q`: 235 passed
+- `pytest -q`: 243 passed
 - `ruff check src/career_resume_skill tests`: all checks passed
 
 ## Component Coverage
@@ -82,7 +82,7 @@ Date: 2026-09-29. Fresh isolated outputs were generated after the review-driven 
 - Optional `LIBREOFFICE_PATH`, `TECTONIC_PATH`, and `MICROSOFT_WORD_PATH` overrides support custom compiler installations; `PageLimitError.to_dict()` exposes machine-readable page/limit/log context.
 - LLM schema-repair attempts now lower temperature/top-p within bounded floors; same-role, low-score Ledger gaps are supplied only as evidence-gated review reminders, never as candidate facts.
 - ATS package scoring now includes Resume and Cover Letter text while retaining a nested `resume_only` score and missing-keyword breakdown, so Cover Letter matches do not hide Resume-specific gaps.
-- Live API follow-up: Cover Letter repetition is now included in bounded rewrite feedback and delivery verification; unsupported per-item technologies receive one evidence-scoped retry. Chinese resumes preserve original Master CV skills and retry English-only bullets once; the September 30 Chinese DOCX live attempts still failed the Chinese bullet gate. The English DOCX live retry reached Cover Letter validation but failed the former 140-word second-paragraph minimum; the supported minimum is now 120 words with the total word budget unchanged. No successful post-change live delivery is claimed.
+- October 1 live API verification: DOCX and LaTeX DeepSeek routes both produced one-page Resume/Cover Letter PDFs with `verified=true`; Integrity, content Critics, and independent Harness checks passed. The DOCX API package scored 31/31 (package/Resume-only ATS); the LaTeX synthetic-CV package scored 61/53. Follow-up fixes made the cover-letter total floor equal the sum of paragraph hard minima and included source-provided GitHub/LinkedIn links in PDF technology provenance; unsupported technologies remain blocked.
 - Phase 2 now includes deterministic `critic/` modules for Cover Letter grammar/repetition and DOCX bullet filler diagnostics.
 - Text-content review now also checks duplicate Resume bullets, Markdown prefixes, abnormal whitespace, sentence endings, Cover Letter boilerplate, and paragraph structure.
 - `docx_sanitizer.py` centralizes lexical and OOXML sanitization; Harness typography checks hard-fail extraction-visible trailing dash artifacts.
@@ -112,11 +112,11 @@ Latest full component run: `output/deliveries/api-run-20260929-final-v4`. Enviro
 
 ## Latest Fixed-Directory API Run
 
-The newest complete API validation is stored under `output/deliveries/api-run-20260929`:
+The October 1 complete API validation is stored in separate ignored output directories:
 
-- `latex-application-report.json`: `verified=true`, Resume/Cover Letter `1/1`, integrity and Critic checks passed.
-- `docx-application-report.json`: `verified=true`, Resume/Cover Letter `1/1`, integrity and Critic checks passed.
-- All DOCX/PDF/TXT/Markdown artifacts exist in the same fixed directory, and both routes wrote Ledger entries.
+- `output/api-full-20261001-docx-retry/application_package.json`: `verified=true`, Resume/Cover Letter `1/1`, Integrity/Critics/Harness passed; Ledger written.
+- `output/api-full-20261001-latex-final/application_package.json`: `verified=true`, Resume/Cover Letter `1/1`, Integrity/Critics/Harness passed; Ledger written.
+- `pytest -q`: 243 passed; Ruff and `git diff --check` passed.
 
 ## Live API outcome expectation
 The system should produce a single-page tailored resume, a single-page cover letter PDF, an application report, and a valid DOCX export with ledger metadata when the model output satisfies all evidence gates.

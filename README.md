@@ -64,7 +64,7 @@ JD 分析只注册 `analyze_job_description` 一个 MCP 工具；旧 `analyze_ta
 
 申请包同时返回 `ats_report`（Resume + Cover Letter 的硬技能/优选词精确与语义覆盖、缺项，并保留 `resume_only` 子报告用于单独查看简历缺口）和 `fact_cards`（事实原文、技术词、已验证数字及 Evidence ID）。中文长句要求会保留在 `excluded_non_atomic_requirements` 审计字段中，不作为单个 ATS 关键词计分；直接 ATS 评分也会再次执行原子短语过滤，避免绕过应用层分析。DOCX 注入前每个 item 的 bullet 列表受 `item_bullet_budgets` 硬截断，fidelity 回退只做原地替换。ATS 分数是本申请包的透明关键词覆盖启发式值，不代表任何商业 ATS 排名或录用概率；现实 ATS 对求职信的计分权重各异，因此同时保留 Resume-only 子报告，且不会以虚构补词提升分数。PDF 交付前还会运行 Integrity Linter：单页预算、被引用证据中的指标不变性、未授权技术/高危黑名单、尾部破折号和私有区字形。
 
-求职信严格为三段；Pydantic 校验段落词数区间为 45-80、120-195、55-90，总计防御区间为 245-350 词，提示目标仍为 280-340 词。Cover Letter 字数不足时允许有限的额外修复尝试，但不会放宽段落结构、证据、技术和指标校验。申请包同时生成 UTF-8 纯文本和 Markdown，并分别通过 `cover_letter_text_path` 与 `cover_letter_md_path` 返回路径。模型生成的简历和求职信只对来源证据中出现的技术词规范大小写；词表在 `src/career_resume_skill/technology_terms.json`，不会把 JD 里的新工具加入候选人事实。求职信签名由模板排版，PDF 测试会拦截 `extbf` 字样泄漏。示例配置在 `src/career_resume_skill/templates/few_shots.json`，高危术语在 `src/career_resume_skill/hallucination_blacklist.json`；修改配置后需通过 Schema/事实测试。新增岗位原型仍需扩展 Pydantic 的 `role_type` 枚举。
+求职信严格为三段；Pydantic 校验段落词数区间为 45-80、115-195、50-90，总计防御区间为 210-350 词，提示目标仍为 280-340 词。技术段和结尾段下限各比先前放宽 5 词，用于容纳模型计数波动；总下限等于三个段落硬下限之和，不额外要求填充。证据、技术和指标校验仍然严格。申请包同时生成 UTF-8 纯文本和 Markdown，并分别通过 `cover_letter_text_path` 与 `cover_letter_md_path` 返回路径。模型生成的简历和求职信只对来源证据中出现的技术词规范大小写；词表在 `src/career_resume_skill/technology_terms.json`，不会把 JD 里的新工具加入候选人事实。求职信签名由模板排版，PDF 测试会拦截 `extbf` 字样泄漏。示例配置在 `src/career_resume_skill/templates/few_shots.json`，高危术语在 `src/career_resume_skill/hallucination_blacklist.json`；修改配置后需通过 Schema/事实测试。新增岗位原型仍需扩展 Pydantic 的 `role_type` 枚举。
 
 DOCX 申请包经历 `INGESTION → PROJECTION → GEOMETRIC_EVALUATION → DOCX_INJECTION → HEADLESS_VERIFICATION`；预渲染几何仅评估，不因单条偏长就截断。版式恢复采用保守的 level 0→1→2 自底向上试探：先保留原生样式，只有实际 PDF 超页才升级到 level 1，再必要时升级到 level 2，避免精简内容被过度压实。level 1 收紧继承段落间距与行距，level 2 使用 215 twips 行距并有界收缩上下页边距，同时保留标题 `keepNext` 和最小呼吸间距。视觉底部留白 3%~10% 视为舒适区；若严格 level 2 仍无法单页，仅允许放松标题额外间距作为可审计兜底，不放松证据、指标或页数门禁。随后才进入 `TARGETED_RE_RANKING`：优先选择可节省行数的 Tier 3/Tier 2 bullet，一次只缩短一条，再从原始 DOCX 注入并终验。若补丁丢失来源指标、已知技术、引入未经验证的数字、违反 Level 1 保真或没有减少占宽，则拒绝并保留原文。模型不可用时不伪造微调；重试仍非单页则阻断交付。`refinement` 返回状态轨迹。
 
@@ -122,6 +122,12 @@ Remove-Item $zip -Force
 ```
 
 `.tools/` 已加入 `.gitignore`，不会把本地编译器提交到仓库。
+
+### 本机网页向导（Windows）
+
+双击仓库根目录的 `start_career_resume_web.bat`。首次启动会创建项目虚拟环境并安装 Python 依赖，随后自动打开本机网页；之后再次双击即可使用。默认端口为 `8765`，若被占用会自动保留下一个可用的本机端口并打开对应页面。网页仅绑定 `127.0.0.1`，不会向局域网开放。API Key 可在表单中临时输入，也可使用本机 `.env` 中已配置的 Key；表单 Key 不写入文件、浏览器存储或 URL。简历原件在生成期间放入临时目录，生成文件保存在本机 `output/web/`。LaTeX PDF 需要 Tectonic/XeLaTeX/LuaLaTeX；DOCX 转 PDF 需要 Word 或 LibreOffice，网页会报告环境错误但不会绕过质量门禁。
+
+当前网页模式由 DeepSeek API（或 `.env` 中配置的 OpenAI-compatible 服务）执行模型生成。仅向 AI 上传 `SKILL.md` 不会让 MCP 后端自动使用该 AI 客户端自己的模型；如需此模式，仍需在支持 MCP 的 AI 客户端连接本项目 MCP Server。现有 MCP 与 CLI 路径保持可用。
 
 运行时依赖可通过 `python -m pip install -r requirements.txt` 安装；开发环境（含 pytest 和 Ruff）使用 `python -m pip install -r requirements-dev.txt`。两个 requirements 文件都转交给 `pyproject.toml` 的依赖/extra 声明，避免维护重复或过期的包列表。也可以直接使用 pip extra 安装开发依赖：
 

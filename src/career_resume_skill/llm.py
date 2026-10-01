@@ -144,6 +144,10 @@ class DeepSeekClient:
     def model_name(self) -> str:
         return self.settings.model
 
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+
     async def complete_json(
         self,
         task: str,

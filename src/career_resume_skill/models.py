@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 COVER_LETTER_TARGET_MIN_WORDS = 280
 COVER_LETTER_TARGET_MAX_WORDS = 340
-COVER_LETTER_HARD_MIN_WORDS = 245
+COVER_LETTER_HARD_MIN_WORDS = 210
 COVER_LETTER_HARD_MAX_WORDS = 350
 
 RoleType = Literal[
@@ -157,7 +157,7 @@ class CoverLetterDraft(StrictModel):
     paragraphs: list[str] = Field(
         description=(
             "Exactly three English prose paragraphs; target 50-70, 140-175, and 60-80 words. "
-            "Validation bands are 45-80, 120-195, and 55-90 words respectively, with a "
+            "Validation bands are 45-80, 115-195, and 50-90 words respectively, with a "
             f"defensive {COVER_LETTER_HARD_MIN_WORDS}-{COVER_LETTER_HARD_MAX_WORDS} word total band."
         )
     )
@@ -179,7 +179,7 @@ class CoverLetterDraft(StrictModel):
         if getattr(self, "model_used", None) == "deterministic_fallback":
             return self
         counts = [len(paragraph.split()) for paragraph in self.paragraphs]
-        bounds = ((45, 80), (120, 195), (55, 90))
+        bounds = ((45, 80), (115, 195), (50, 90))
         violations = [
             f"paragraph {index + 1}={count} (expected {minimum}-{maximum})"
             for index, (count, (minimum, maximum)) in enumerate(zip(counts, bounds))

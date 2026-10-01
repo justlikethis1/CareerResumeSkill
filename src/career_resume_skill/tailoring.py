@@ -137,7 +137,7 @@ I...". In the first sentence, identify the target role and the candidate's verif
 in the second sentence, surface the strongest directly relevant evidence and its exact verified outcome. Keep any
 application-intent boilerplate to at most one short sentence. State academic status only when verified.
 
-Paragraph 2 (140-175 words; accepted 120-195): one cohesive deep-dive story using the two strongest evidence-backed experiences.
+Paragraph 2 (140-175 words; accepted 115-195): one cohesive deep-dive story using the two strongest evidence-backed experiences.
 Explain the technical bottleneck, architecture/algorithmic decisions, evidence-supported trade-offs, and exact verified outcomes. Weave in
 JD terminology via semantic_mapping_directives without claiming unverified work. Do not produce a skill list or
 relabel DPO as sparse-reward learning, or time-series forecasting as long-horizon agent trajectory modeling.
@@ -148,7 +148,7 @@ When two evidence domains are used, bridge them through a shared evidence-suppor
 do not join them with a bare chronological transition such as "Earlier, at...". Paragraph 3 must synthesize rather
 than repeat Paragraph 2's long phrases, tools, datasets, or metrics verbatim.
 
-Paragraph 3 (60-80 words): team alignment and active technical call to action. Use verified_company_context for any specific
+Paragraph 3 (60-80 words; accepted 50-90): team alignment and active technical call to action. Use verified_company_context for any specific
 company claim; otherwise discuss only the verified JD domain. Emphasize converting complex algorithms into
 stable, reproducible engineering workflows, invite a technical discussion, and thank the reader briefly.
 

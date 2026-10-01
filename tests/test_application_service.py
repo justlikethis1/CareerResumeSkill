@@ -8,12 +8,14 @@ import pytest
 
 from career_resume_skill.application import (
     ApplicationService,
+    _candidate_technology_source_text,
     _failed_content_critics,
     _score_application_package,
 )
 from career_resume_skill.cli import _parser, _read_inputs
 from career_resume_skill.config import Settings
 from career_resume_skill.latex import PageLimitError
+from career_resume_skill.quality import lint_output_integrity
 
 
 class _UnavailableProvider:
@@ -310,6 +312,28 @@ def test_delivery_gate_includes_failed_content_critics() -> None:
         "resume_content_critic": {"passed": True},
     }) == ["cover_letter_critic"]
     assert not _failed_content_critics({"cover_letter_critic": {"passed": True}})
+
+
+def test_integrity_source_includes_candidate_profile_links_as_technology_provenance() -> None:
+    source = _candidate_technology_source_text({
+        "name": "Candidate",
+        "contact": {
+            "email": "candidate@example.com",
+            "github": "https://github.com/candidate",
+            "linkedin": "https://linkedin.com/in/candidate",
+        },
+        "skills": {},
+        "sections": [],
+    })
+    report = lint_output_integrity(
+        source,
+        "GitHub | LinkedIn",
+        1,
+        expected_pages=1,
+        source_technology_text=source,
+    )
+
+    assert report["checks"]["technology_provenance"]["passed"] is True
 
 
 def test_application_runs_get_unique_output_directories(tmp_path: Path) -> None:

@@ -72,6 +72,14 @@ def _candidate_text(candidate: dict[str, Any]) -> str:
     return " ".join(fact["text"] for fact in build_fact_cards(candidate))
 
 
+def _candidate_technology_source_text(candidate: dict[str, Any]) -> str:
+    contact = candidate.get("contact") or {}
+    contact_links = " ".join(
+        str(contact.get(field, "")) for field in ("linkedin", "github") if contact.get(field)
+    )
+    return f"{_candidate_text(candidate)} {contact_links}".strip()
+
+
 def _missing_ats_keywords(ats_report: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(
         [
@@ -608,7 +616,7 @@ class ApplicationService:
             quality_report["pages"]["output"],
             expected_pages=1,
             bullet_texts=bullet_texts,
-            source_technology_text=_candidate_text(imported["master_cv"]),
+            source_technology_text=_candidate_technology_source_text(imported["master_cv"]),
         )
         failed_critics = _failed_content_critics(quality_report)
         delivery_verified = integrity_report["passed"] and not failed_critics
@@ -853,7 +861,7 @@ class ApplicationService:
                 documents["resume"]["pages"],
                 expected_pages=page_limit,
                 bullet_texts=resume_bullets,
-                source_technology_text=_candidate_text(master_cv_json),
+                source_technology_text=_candidate_technology_source_text(master_cv_json),
             )
             cover_evidence_ids = set(cover_letter.get("evidence_ids", []))
             cover_source_text = " ".join(
@@ -865,6 +873,7 @@ class ApplicationService:
                 cover_text,
                 documents["cover_letter"]["pages"],
                 expected_pages=page_limit,
+                source_technology_text=_candidate_technology_source_text(master_cv_json),
             )
             ats_report["integrity_linter"] = {
                 "resume": resume_integrity,
