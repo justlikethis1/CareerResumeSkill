@@ -45,6 +45,9 @@ packages = ["src/career_resume_skill"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = "-ra"
+strict_config = true
+strict_markers = true
 
 [tool.ruff]
 line-length = 100

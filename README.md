@@ -123,10 +123,10 @@ Remove-Item $zip -Force
 
 `.tools/` 已加入 `.gitignore`，不会把本地编译器提交到仓库。
 
-只需运行依赖时可执行 `python -m pip install -r requirements.txt`；该文件通过 `-e .` 读取 `pyproject.toml` 的依赖声明并安装本地项目。开发和运行测试则使用以下命令，额外安装 pytest 与 Ruff：
+运行时依赖可通过 `python -m pip install -r requirements.txt` 安装；开发环境（含 pytest 和 Ruff）使用 `python -m pip install -r requirements-dev.txt`。两个 requirements 文件都转交给 `pyproject.toml` 的依赖/extra 声明，避免维护重复或过期的包列表。也可以直接使用 pip extra 安装开发依赖：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -r requirements-dev.txt
 # .env 已存在时只需编辑它；若被删除，可重新复制示例：
 Copy-Item .env.example .env
 ```
