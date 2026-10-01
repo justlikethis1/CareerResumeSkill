@@ -1,5 +1,6 @@
 import base64
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from lxml import etree as ET
+from pypdf import PdfReader, PdfWriter
 
 from career_resume_skill import docx_cli, docx_engine
 from career_resume_skill.docx_engine import (
@@ -18,6 +20,7 @@ from career_resume_skill.docx_engine import (
     _clean_replacement_text,
     _deduplicate_pdf_pages,
     _sanitize_pdf_dash_fillers,
+    _word_conversion_timeout_seconds,
     calculate_docx_layout_budget,
     convert_docx_to_pdf,
     inject_docx_bullet_groups,
@@ -682,6 +685,59 @@ def test_libreoffice_conversion_uses_headless_flags_and_isolated_profile(
     assert profile_uri.startswith("file:")
     assert captured["timeout"] == 180
     assert result.stat().st_size > 0
+
+
+def test_word_timeout_falls_back_to_libreoffice_and_replaces_partial_pdf(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "resume.docx"
+    source.write_bytes(b"docx")
+    output_dir = tmp_path / "pdf"
+    word_calls: list[str] = []
+    libreoffice_calls: list[str] = []
+
+    def fake_word(source_path: Path, pdf_path: Path) -> Path:
+        word_calls.append(str(source_path))
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"partial Word PDF")
+        raise subprocess.TimeoutExpired("winword", 60)
+
+    def fake_libreoffice(source_path: Path, target_dir: Path, pdf_path: Path, soffice: str) -> Path:
+        libreoffice_calls.append(soffice)
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with pdf_path.open("wb") as output:
+            writer.write(output)
+        return pdf_path
+
+    monkeypatch.setattr(docx_engine, "find_microsoft_word", lambda: "winword")
+    monkeypatch.setattr(docx_engine, "find_libreoffice", lambda: "soffice")
+    monkeypatch.setattr(docx_engine, "_convert_docx_with_word", fake_word)
+    monkeypatch.setattr(docx_engine, "_convert_docx_with_libreoffice", fake_libreoffice)
+
+    result = convert_docx_to_pdf(source, output_dir)
+
+    assert result == output_dir / "resume.pdf"
+    assert len(PdfReader(result).pages) == 1
+    assert word_calls == [str(source.resolve())]
+    assert libreoffice_calls == ["soffice"]
+
+
+@pytest.mark.parametrize(("configured", "expected"), [
+    (None, 60.0),
+    ("30", 30.0),
+    ("0", 1.0),
+    ("500", 180.0),
+    ("invalid", 60.0),
+])
+def test_word_conversion_timeout_is_bounded(monkeypatch, configured: str | None, expected: float) -> None:
+    if configured is None:
+        monkeypatch.delenv("CAREER_SKILL_WORD_CONVERSION_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("CAREER_SKILL_WORD_CONVERSION_TIMEOUT_SECONDS", configured)
+
+    assert _word_conversion_timeout_seconds() == expected
 
 
 def test_clean_replacement_text_removes_padding_not_valid_hyphens() -> None:

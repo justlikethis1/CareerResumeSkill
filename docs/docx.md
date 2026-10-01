@@ -77,7 +77,7 @@ Input:
 }
 ```
 
-This calls `soffice --headless --convert-to pdf`. Install LibreOffice separately and ensure `soffice` or `libreoffice` is on PATH. The module does not silently fall back to a re-created document or a screenshot renderer.
+PDF conversion prefers Microsoft Word COM when Word is installed. If Word fails or reaches `CAREER_SKILL_WORD_CONVERSION_TIMEOUT_SECONDS` (default 60 seconds, bounded to 1-180), the module removes any partial PDF and retries with LibreOffice when available. Without Word, it calls `soffice --headless --convert-to pdf` directly. Install LibreOffice separately and ensure `soffice` or `libreoffice` is on PATH. It never falls back to a re-created document or screenshot renderer.
 
 ## Python API
 

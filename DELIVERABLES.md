@@ -25,7 +25,7 @@ Use `--output-dir <directory>` to pin a run's generated reports and LaTeX artifa
 
 ## Verification status
 The current codebase is verified by the project test suite:
-- `pytest -q`: 243 passed
+- `pytest -q`: 250 passed
 - `ruff check src/career_resume_skill tests`: all checks passed
 
 ## Component Coverage
@@ -77,6 +77,8 @@ Date: 2026-09-29. Fresh isolated outputs were generated after the review-driven 
 - LLM JSON repair uses a bounded sliding context and retries empty/runtime/API failures without accumulating the full failed history.
 - DOCX import recognizes common Chinese role titles, and owned image-extraction resources support explicit cleanup/context-manager use.
 - Ledger and private Master CV history updates use OS-held cross-process locks plus atomic JSON replacement; same-role historical reminders share the lock, and macOS LibreOffice discovery is supported.
+- DOCX PDF conversion remains Word-first; Word COM failures/timeouts are bounded to 60 seconds by default and automatically fall back to LibreOffice after removing partial PDFs. The timeout is configurable within 1-180 seconds.
+- DOCX Master CV import remains the dependency boundary; after import, JD analysis and local layout-budget measurement run concurrently because they consume the same source independently. Tailoring still waits for both results, preserving budget and evidence semantics.
 - Cover Letter word-budget rules now live with the Pydantic model; metric units are declared separately and composed into the extractor regex; ATS handles selected phrase-level singular/plural variants without external stemming dependencies.
 - Independent LaTeX Resume/Cover Letter compilation and Cover Letter TXT/Markdown writes now run concurrently; DOCX source-baseline conversion and Cover Letter compilation also run concurrently. Geometry refinement remains sequential because patches share one mutable resume and require revalidation after each change.
 - Optional `LIBREOFFICE_PATH`, `TECTONIC_PATH`, and `MICROSOFT_WORD_PATH` overrides support custom compiler installations; `PageLimitError.to_dict()` exposes machine-readable page/limit/log context.
@@ -116,7 +118,7 @@ The October 1 complete API validation is stored in separate ignored output direc
 
 - `output/api-full-20261001-docx-retry/application_package.json`: `verified=true`, Resume/Cover Letter `1/1`, Integrity/Critics/Harness passed; Ledger written.
 - `output/api-full-20261001-latex-final/application_package.json`: `verified=true`, Resume/Cover Letter `1/1`, Integrity/Critics/Harness passed; Ledger written.
-- `pytest -q`: 243 passed; Ruff and `git diff --check` passed.
+- Final offline regression after converter fallback and DOCX preparation concurrency: `pytest -q` 250 passed; Ruff and `git diff --check` passed. No API calls were made for these performance changes.
 
 ## Live API outcome expectation
 The system should produce a single-page tailored resume, a single-page cover letter PDF, an application report, and a valid DOCX export with ledger metadata when the model output satisfies all evidence gates.

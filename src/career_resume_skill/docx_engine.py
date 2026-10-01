@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -638,14 +639,36 @@ def convert_docx_to_pdf(docx_path: str | Path, output_dir: str | Path | None = N
     target_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = target_dir / f"{source.stem}.pdf"
     if find_microsoft_word():
-        return _deduplicate_pdf_pages(
-            _sanitize_pdf_dash_fillers(_convert_docx_with_word(source, pdf_path))
-        )
+        try:
+            word_pdf = _convert_docx_with_word(source, pdf_path)
+        except (DocxLayoutError, OSError, subprocess.SubprocessError) as word_error:
+            soffice = find_libreoffice()
+            if not soffice:
+                raise DocxLayoutError(
+                    "Microsoft Word PDF conversion failed and LibreOffice fallback is unavailable: "
+                    f"{word_error}"
+                ) from word_error
+            pdf_path.unlink(missing_ok=True)
+            try:
+                fallback_pdf = _convert_docx_with_libreoffice(source, target_dir, pdf_path, soffice)
+            except (DocxLayoutError, OSError, subprocess.SubprocessError) as fallback_error:
+                raise DocxLayoutError(
+                    "Microsoft Word PDF conversion failed and LibreOffice fallback also failed: "
+                    f"{fallback_error}"
+                ) from fallback_error
+            return _deduplicate_pdf_pages(_sanitize_pdf_dash_fillers(fallback_pdf))
+        return _deduplicate_pdf_pages(_sanitize_pdf_dash_fillers(word_pdf))
     soffice = find_libreoffice()
     if not soffice:
         raise DocxLayoutError(
             "LibreOffice headless executable not found. Install LibreOffice to export DOCX to PDF."
         )
+    return _convert_docx_with_libreoffice(source, target_dir, pdf_path, soffice)
+
+
+def _convert_docx_with_libreoffice(
+    source: Path, target_dir: Path, pdf_path: Path, soffice: str
+) -> Path:
     with tempfile.TemporaryDirectory(prefix="career-resume-lo-") as profile_dir:
         process = subprocess.run(
             [
@@ -778,13 +801,21 @@ try {{
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=180,
+                timeout=_word_conversion_timeout_seconds(),
                 check=False,
         )
         if process.returncode != 0 or not pdf_path.exists():
                 log = ((process.stdout or "") + "\n" + (process.stderr or "")).strip()
                 raise DocxLayoutError(f"Microsoft Word PDF conversion failed:\n{log[-4000:]}")
         return pdf_path
+
+
+def _word_conversion_timeout_seconds() -> float:
+    try:
+        configured = float(os.getenv("CAREER_SKILL_WORD_CONVERSION_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        return 60.0
+    return min(max(configured, 1.0), 180.0)
 
 
 def _read_relationships(package: zipfile.ZipFile) -> dict[str, str]:

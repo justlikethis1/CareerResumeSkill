@@ -394,10 +394,12 @@ class ApplicationService:
         if resume_language == "zh_CN" and not self.provider.available:
             raise ValueError("Chinese DOCX resume requires a configured LLM provider")
         imported = await self.import_docx_master_cv(docx_source)
-        jd_analysis = await self.analyze_job_description(jd_text, imported["master_cv"])
+        jd_analysis, layout_budget = await asyncio.gather(
+            self.analyze_job_description(jd_text, imported["master_cv"]),
+            asyncio.to_thread(calculate_docx_layout_budget, docx_source),
+        )
         jd_analysis["resume_language"] = resume_language
         item_budgets = allocate_item_bullet_budgets(imported["master_cv"], jd_analysis)
-        layout_budget = await asyncio.to_thread(calculate_docx_layout_budget, docx_source)
         paragraph_budgets = {
             paragraph["paragraph_id"]: paragraph
             for paragraph in layout_budget["paragraphs"]

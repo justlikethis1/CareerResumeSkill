@@ -153,7 +153,7 @@ Invoke-WebRequest `
 Start-Process msiexec.exe -ArgumentList "/i `"$msi`"" -Wait
 ```
 
-默认使用 `deepseek-chat` 和 `https://api.deepseek.com`。本地 vLLM 或其他 OpenAI-compatible DeepSeek 服务可通过 `.env` 中的 `DEEPSEEK_BASE_URL` 与 `DEEPSEEK_MODEL` 切换。`.env` 留空时所有流程自动使用离线 fallback。
+DOCX 转 PDF 会优先使用 Microsoft Word；Word COM 失败或超时且 LibreOffice 已安装时会自动回退，并清理失败导出的中间 PDF。`CAREER_SKILL_WORD_CONVERSION_TIMEOUT_SECONDS` 默认 60 秒，可在 `.env` 中设为 1–180 秒。默认使用 `deepseek-chat` 和 `https://api.deepseek.com`。本地 vLLM 或其他 OpenAI-compatible DeepSeek 服务可通过 `.env` 中的 `DEEPSEEK_BASE_URL` 与 `DEEPSEEK_MODEL` 切换。`.env` 留空时所有流程自动使用离线 fallback。
 
 ### Docker
 

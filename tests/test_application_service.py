@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -101,6 +102,45 @@ def test_compile_calls_can_progress_concurrently(monkeypatch, tmp_path: Path) ->
     assert resume["pages"] == 1
     assert cover["pages"] == 1
     assert elapsed < 0.14
+
+
+def test_docx_jd_analysis_overlaps_local_layout_measurement(monkeypatch, tmp_path: Path) -> None:
+    from career_resume_skill import application
+
+    service = ApplicationService(
+        Settings(output_dir=str(tmp_path)), provider=_UnavailableProvider()
+    )
+    layout_started = threading.Event()
+
+    async def fake_import(_: str) -> dict[str, object]:
+        return {"master_cv": {}, "source_item_map": {}}
+
+    async def fake_analyze(*_: object) -> dict[str, object]:
+        assert await asyncio.to_thread(layout_started.wait, 0.75)
+        return {}
+
+    def fake_layout(_: str) -> dict[str, object]:
+        layout_started.set()
+        time.sleep(0.05)
+        return {"paragraphs": []}
+
+    def stop_after_parallel_inputs(*_: object) -> dict[str, object]:
+        raise RuntimeError("reached post-analysis allocation")
+
+    monkeypatch.setattr(service, "import_docx_master_cv", fake_import)
+    monkeypatch.setattr(service, "analyze_job_description", fake_analyze)
+    monkeypatch.setattr(application, "calculate_docx_layout_budget", fake_layout)
+    monkeypatch.setattr(application, "allocate_item_bullet_budgets", stop_after_parallel_inputs)
+
+    started = time.perf_counter()
+    with pytest.raises(RuntimeError, match="reached post-analysis allocation"):
+        asyncio.run(service.generate_docx_application_package(
+            "source.docx", "JD", str(tmp_path / "out.docx"), "Example",
+        ))
+    elapsed = time.perf_counter() - started
+
+    assert layout_started.is_set()
+    assert elapsed < 0.5
 
 
 def test_resume_render_returns_content_after_page_pruning(monkeypatch, tmp_path: Path) -> None:
