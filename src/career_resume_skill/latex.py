@@ -11,7 +11,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pypdf import PdfReader
 
 from .facts import extract_metrics, normalize_metric
-from .quality import _is_primary_metric
+from .quality import _has_operational_count, _is_primary_metric
 from .tools import find_tectonic
 
 _ESCAPE_MAP = {
@@ -43,6 +43,16 @@ def _escape_tree(value: Any) -> Any:
     return value
 
 
+def _contains_cjk(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(re.search(r"[\u4e00-\u9fff]", value))
+    if isinstance(value, dict):
+        return any(_contains_cjk(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_cjk(child) for child in value)
+    return False
+
+
 def render_template(template_name: str, content: dict[str, Any], output_path: Path, compact: int = 0) -> Path:
     if template_name not in {"resume", "cover_letter"}:
         raise ValueError("template_name must be 'resume' or 'cover_letter'")
@@ -64,7 +74,10 @@ def render_template(template_name: str, content: dict[str, Any], output_path: Pa
     template = environment.get_template(f"{template_name}.tex.j2")
     safe_content = _escape_tree(content)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(template.render(**safe_content, compact=compact), encoding="utf-8")
+    output_path.write_text(
+        template.render(**safe_content, compact=compact, contains_cjk=_contains_cjk(content)),
+        encoding="utf-8",
+    )
     return output_path
 
 
@@ -108,6 +121,8 @@ def compile_latex(tex_path: Path, page_limit: int = 1) -> dict[str, Any]:
     pdf_path = tex_path.with_suffix(".pdf")
     if process.returncode != 0 or not pdf_path.exists():
         raise RuntimeError(f"LaTeX compilation failed with {compiler}:\n{log[-6000:]}")
+    if "Missing character: There is no" in log:
+        raise RuntimeError("LaTeX output is missing glyphs from the selected font")
     pages = len(PdfReader(str(pdf_path)).pages)
     if pages > page_limit:
         raise PageLimitError(pages, page_limit, log)
@@ -155,7 +170,7 @@ def prune_low_priority_resume(content: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 def _bullet_has_primary_metric(bullet: str) -> bool:
-    return any(
+    return _has_operational_count(bullet) or any(
         _is_primary_metric(metric)
         for metric in extract_metrics(bullet)
         if normalize_metric(metric)

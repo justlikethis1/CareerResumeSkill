@@ -240,6 +240,7 @@ async def generate_docx_application_package(
     verified_company_context: str = "",
     resume_language: str = "en",
     application_date: str = "",
+    layout_strategy: str = "fast",
 ) -> dict[str, Any]:
     """Tailor a DOCX-derived Master CV and inject only existing bullet paragraphs into the original template."""
     return await services.generate_docx_application_package(
@@ -251,6 +252,7 @@ async def generate_docx_application_package(
         verified_company_context,
         resume_language,
         application_date,
+        layout_strategy,
     )
 
 

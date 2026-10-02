@@ -28,14 +28,15 @@ def _repair_guidance(error: Exception) -> str:
             )
         ]
         underflows = [
-            f"{label}: add at least {minimum - actual} words (currently {actual}, minimum {minimum})"
+            f"{label}: add at least {minimum - actual + 10} words (currently {actual}, "
+            f"hard minimum {minimum}; leave a 10-word safety margin)"
             for label, actual, minimum, _ in ranges if actual < minimum
         ]
         if underflows:
             instructions.append(
                 "WordCountUnderflow: DO NOT SHORTEN. " + "; ".join(underflows) + ". "
-                "Add only concise details explicitly supported by the cited evidence. "
-                "Do not invent claims or metrics."
+                "Add distinct technical detail supported by the cited evidence, and do not repeat "
+                "claims or metrics already used in another paragraph. Do not invent claims or metrics."
             )
         else:
             instructions.append(

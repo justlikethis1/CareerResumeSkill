@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import tempfile
+import time
 from copy import deepcopy
 from datetime import date, datetime
 from pathlib import Path
@@ -66,6 +68,26 @@ produce a semantic_mapping_directive with:
 - expected_focus: the primary emphasis, such as convergence, evaluation, latency, throughput, reliability, or scale.
 
 Do not authorize unverified tools or responsibilities. The directives are lexical framing instructions, not new facts."""
+
+
+class _PerformanceRecorder:
+    """Record stage durations only; never attach user inputs or generated content."""
+
+    def __init__(self) -> None:
+        self._started = time.perf_counter()
+        self._stage_started = self._started
+        self._stages: dict[str, float] = {}
+
+    def checkpoint(self, stage: str) -> None:
+        now = time.perf_counter()
+        self._stages[stage] = round(now - self._stage_started, 3)
+        self._stage_started = now
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "total_seconds": round(time.perf_counter() - self._started, 3),
+            "stages_seconds": dict(self._stages),
+        }
 
 
 def _candidate_text(candidate: dict[str, Any]) -> str:
@@ -149,6 +171,7 @@ def _cover_letter_metadata(
     date_str: str,
     contact: dict[str, Any],
     jd_analysis: dict[str, Any],
+    jd_text: str = "",
 ) -> dict[str, Any]:
     role_titles = {
         "ai_research": "AI Research",
@@ -157,9 +180,21 @@ def _cover_letter_metadata(
         "data_engineering": "Data Engineering",
         "general_software": "Software Engineering",
     }
+    first_line = next((line.strip() for line in jd_text.splitlines() if line.strip()), "")
+    labeled_title = re.match(
+        r"^(?:职位名称|岗位名称|职位|岗位|Job Title|Position|Role)\s*[:：]\s*(.+)$",
+        first_line, re.IGNORECASE,
+    )
+    literal_title = labeled_title.group(1).strip() if labeled_title else (
+        first_line if len(first_line) <= 50 and first_line != company_name
+        and re.search(r"(?:实习生|工程师|研究员|分析师|经理|专员|Intern|Engineer|Analyst)$",
+                      first_line, re.IGNORECASE)
+        else ""
+    )
     job_title = (
         jd_analysis.get("job_title")
         or jd_analysis.get("target_role")
+        or literal_title
         or role_titles.get(jd_analysis.get("role_type"), "Software Engineering")
     )
     try:
@@ -388,64 +423,90 @@ class ApplicationService:
         verified_company_context: str = "",
         resume_language: str = "en",
         application_date: str = "",
+        layout_strategy: str = "fast",
     ) -> dict[str, Any]:
+        performance = _PerformanceRecorder()
+        if layout_strategy not in {"baseline", "fast"}:
+            raise ValueError("layout_strategy must be 'baseline' or 'fast'")
         if resume_language not in {"en", "zh_CN"}:
             raise ValueError("resume_language must be 'en' or 'zh_CN'")
         if resume_language == "zh_CN" and not self.provider.available:
             raise ValueError("Chinese DOCX resume requires a configured LLM provider")
         imported = await self.import_docx_master_cv(docx_source)
-        jd_analysis, layout_budget = await asyncio.gather(
-            self.analyze_job_description(jd_text, imported["master_cv"]),
-            asyncio.to_thread(calculate_docx_layout_budget, docx_source),
-        )
-        jd_analysis["resume_language"] = resume_language
-        item_budgets = allocate_item_bullet_budgets(imported["master_cv"], jd_analysis)
-        paragraph_budgets = {
-            paragraph["paragraph_id"]: paragraph
-            for paragraph in layout_budget["paragraphs"]
-        }
-        for item_id, budget in item_budgets.items():
-            source_item = imported.get("source_item_map", {}).get(item_id, {})
-            budget["paragraph_layout"] = [
-                paragraph_budgets[paragraph_id]
-                for paragraph_id in source_item.get("bullet_paragraph_ids", [])
-                if paragraph_id in paragraph_budgets
-            ]
-        jd_analysis["layout_budget"] = layout_budget
-        jd_analysis["item_bullet_budgets"] = item_budgets
-        cache = (
-            VerifiedPayloadCache(self.settings.verified_cache_dir)
-            if self.settings.verified_cache_dir else None
-        )
-        cache_key = payload_cache_key(
-            imported["master_cv"],
-            jd_analysis,
-            layout_budget,
-            model_name=self.provider.model_name,
-            prompt_fingerprint=tailoring_prompt_fingerprint(
-                jd_analysis.get("role_type", "general_software"), resume_language
-            ),
-        )
-        cached = cache.load(cache_key) if cache else None
-        if cached is None:
-            tailored_cv = await self.tailor_resume_content(imported["master_cv"], jd_analysis)
-            refinement = await refine_one_bullet(
-                tailored_cv, imported["master_cv"], imported.get("source_item_map", {}),
-                layout_budget, self.provider, audit_only=True, item_budgets=item_budgets,
+        performance.checkpoint("docx_import")
+        source_pdf_dir = Path(output_docx).expanduser().resolve().parent / "source-baseline"
+        async def prepare_payload() -> tuple[Any, ...]:
+            jd_analysis, layout_budget = await asyncio.gather(
+                self.analyze_job_description(jd_text, imported["master_cv"]),
+                asyncio.to_thread(calculate_docx_layout_budget, docx_source),
             )
-        else:
-            tailored_cv = cached
-            refinement = {
-                "states": ["INGESTION", "PROJECTION", "GEOMETRIC_EVALUATION"],
-                "outcome": "verified_cache_hit",
+            performance.checkpoint("jd_analysis_and_layout_budget")
+            jd_analysis["resume_language"] = resume_language
+            item_budgets = allocate_item_bullet_budgets(imported["master_cv"], jd_analysis)
+            paragraph_budgets = {
+                paragraph["paragraph_id"]: paragraph
+                for paragraph in layout_budget["paragraphs"]
             }
-        evidence_ids, bullet_texts = _candidate_bullet_evidence(tailored_cv)
-        preflight = lint_payload_bullets(
-            _source_text_for_evidence(imported["master_cv"], evidence_ids), bullet_texts,
-            language=resume_language,
-        )
-        if not preflight["passed"]:
-            raise ValueError(f"DOCX payload failed preflight integrity checks: {preflight}")
+            for item_id, budget in item_budgets.items():
+                source_item = imported.get("source_item_map", {}).get(item_id, {})
+                budget["paragraph_layout"] = [
+                    paragraph_budgets[paragraph_id]
+                    for paragraph_id in source_item.get("bullet_paragraph_ids", [])
+                    if paragraph_id in paragraph_budgets
+                ]
+            jd_analysis["layout_budget"] = layout_budget
+            jd_analysis["item_bullet_budgets"] = item_budgets
+            cache = (
+                VerifiedPayloadCache(self.settings.verified_cache_dir)
+                if self.settings.verified_cache_dir else None
+            )
+            cache_key = payload_cache_key(
+                imported["master_cv"],
+                jd_analysis,
+                layout_budget,
+                model_name=self.provider.model_name,
+                prompt_fingerprint=tailoring_prompt_fingerprint(
+                    jd_analysis.get("role_type", "general_software"), resume_language
+                ),
+            )
+            cached = cache.load(cache_key) if cache else None
+            if cached is None:
+                tailored_cv = await self.tailor_resume_content(imported["master_cv"], jd_analysis)
+                refinement = await refine_one_bullet(
+                    tailored_cv, imported["master_cv"], imported.get("source_item_map", {}),
+                    layout_budget, self.provider, audit_only=True, item_budgets=item_budgets,
+                )
+            else:
+                tailored_cv = cached
+                refinement = {
+                    "states": ["INGESTION", "PROJECTION", "GEOMETRIC_EVALUATION"],
+                    "outcome": "verified_cache_hit",
+                }
+            evidence_ids, bullet_texts = _candidate_bullet_evidence(tailored_cv)
+            preflight = lint_payload_bullets(
+                _source_text_for_evidence(imported["master_cv"], evidence_ids), bullet_texts,
+                language=resume_language,
+            )
+            if not preflight["passed"]:
+                raise ValueError(f"DOCX payload failed preflight integrity checks: {preflight}")
+            performance.checkpoint("tailoring_cache_refinement_and_preflight")
+            return (jd_analysis, layout_budget, item_budgets, cache, cache_key, cached,
+                    tailored_cv, refinement, evidence_ids, bullet_texts, preflight)
+
+        if layout_strategy == "fast":
+            prepared, source_pdf = await asyncio.gather(
+                prepare_payload(), self.convert_docx_to_pdf(docx_source, str(source_pdf_dir)),
+                return_exceptions=True,
+            )
+            if isinstance(prepared, BaseException):
+                raise prepared
+            if isinstance(source_pdf, BaseException):
+                raise source_pdf
+            performance.checkpoint("source_baseline_wait")
+        else:
+            prepared = await prepare_payload()
+        (jd_analysis, layout_budget, item_budgets, cache, cache_key, cached,
+         tailored_cv, refinement, evidence_ids, bullet_texts, preflight) = prepared
         refinement["states"].append("DOCX_INJECTION")
         bullet_groups: dict[str, dict[str, list[str]]] = {}
         source_item_map = imported.get("source_item_map", {})
@@ -467,10 +528,18 @@ class ApplicationService:
             int(paragraph.get("estimated_source_lines", 0))
             for paragraph in layout_budget.get("paragraphs", [])
         )
+        source_pages = extract_pdf_text(source_pdf["pdf_path"])[0] if layout_strategy == "fast" else 0
+        initial_level = (
+            0 if layout_strategy == "baseline" or (source_pages == 1 and estimated_total_lines <= 25)
+            else 2
+        )
         refinement["layout_heuristic"] = {
             "estimated_total_lines": estimated_total_lines,
-            "initial_compact_level": 0,
-            "strategy": "conservative_ascending_fallback",
+            "initial_compact_level": initial_level,
+            "strategy": (
+                "adaptive_compact_first" if layout_strategy == "fast"
+                else "conservative_ascending_fallback"
+            ),
         }
         with tempfile.TemporaryDirectory(prefix="career-resume-layout-", dir=output_path.parent) as temp_dir:
             temp_root = Path(temp_dir)
@@ -478,19 +547,47 @@ class ApplicationService:
             def attempt_path(level: int) -> Path:
                 return output_path if level == 0 else temp_root / f"{output_path.stem}-compact-{level}.docx"
 
-            selected_level = 0
-            candidate_path = attempt_path(0)
+            async def render_candidate(path: Path, level: int) -> tuple[dict[str, Any], int]:
+                started = time.perf_counter()
+                candidate_pdf = await self.convert_docx_to_pdf(str(path))
+                candidate_pages, _ = extract_pdf_text(candidate_pdf["pdf_path"])
+                refinement.setdefault("pdf_attempts", []).append({
+                    "level": level,
+                    "pages": candidate_pages,
+                    "seconds": round(time.perf_counter() - started, 3),
+                })
+                return candidate_pdf, candidate_pages
+
+            selected_level = initial_level
+            candidate_path = attempt_path(selected_level)
             output = await asyncio.to_thread(
                 inject_docx_bullet_groups,
                 docx_source,
                 candidate_path,
                 bullet_groups,
-                compact_level=0,
+                compact_level=selected_level,
             )
-            pdf = await self.convert_docx_to_pdf(str(output))
+            if layout_strategy == "fast":
+                cover_started = time.perf_counter()
+                cover_result, resume_result = await asyncio.gather(
+                    self.draft_cover_letter(
+                        deepcopy(tailored_cv), company_name, tone,
+                        verified_company_context, jd_analysis,
+                    ),
+                    render_candidate(output, selected_level),
+                    return_exceptions=True,
+                )
+                refinement["initial_cover_and_pdf_overlap_seconds"] = round(
+                    time.perf_counter() - cover_started, 3
+                )
+                if isinstance(resume_result, BaseException):
+                    raise resume_result
+                cover_letter = cover_result
+                pdf, pages = resume_result
+            else:
+                pdf, pages = await render_candidate(output, selected_level)
             refinement["states"].append("HEADLESS_VERIFICATION")
-            pages, _ = extract_pdf_text(pdf["pdf_path"])
-            for level in range(1, 3):
+            for level in range(initial_level + 1, 3):
                 if pages == 1:
                     break
                 candidate_path = attempt_path(level)
@@ -501,8 +598,7 @@ class ApplicationService:
                     bullet_groups,
                     compact_level=level,
                 )
-                candidate_pdf = await self.convert_docx_to_pdf(str(candidate))
-                candidate_pages, _ = extract_pdf_text(candidate_pdf["pdf_path"])
+                candidate_pdf, candidate_pages = await render_candidate(candidate, level)
                 refinement.setdefault("style_attempts", []).append({
                     "level": level, "pages": candidate_pages, "accepted": candidate_pages == 1,
                 })
@@ -517,8 +613,7 @@ class ApplicationService:
                     compact_level=2,
                     protect_headings=False,
                 )
-                relaxed_pdf = await self.convert_docx_to_pdf(str(relaxed_candidate))
-                relaxed_pages, _ = extract_pdf_text(relaxed_pdf["pdf_path"])
+                relaxed_pdf, relaxed_pages = await render_candidate(relaxed_candidate, 2)
                 refinement.setdefault("style_attempts", []).append({
                     "level": 2,
                     "pages": relaxed_pages,
@@ -554,8 +649,7 @@ class ApplicationService:
                         compact_level=selected_level,
                         protect_headings=not refinement.get("heading_protection_relaxed", False),
                     )
-                    pdf = await self.convert_docx_to_pdf(str(output))
-                    pages, _ = extract_pdf_text(pdf["pdf_path"])
+                    pdf, pages = await render_candidate(output, selected_level)
                     refinement["states"].extend(["DOCX_INJECTION", "HEADLESS_VERIFICATION"])
             if output != output_path:
                 final_pdf_path = output_path.with_suffix(".pdf")
@@ -565,30 +659,42 @@ class ApplicationService:
                 pages, _ = extract_pdf_text(pdf["pdf_path"])
             output = output_path
             refinement["applied_compact_level"] = selected_level
-        cover_letter = await self.draft_cover_letter(
-            tailored_cv, company_name, tone, verified_company_context, jd_analysis
-        )
+        performance.checkpoint("resume_injection_and_pdf_attempts")
         letter_date = application_date or datetime.now().astimezone().date().isoformat()
+        if layout_strategy == "fast":
+            if refinement.get("page_retry", {}).get("outcome") == "patch_accepted":
+                cover_letter = await self.draft_cover_letter(
+                    tailored_cv, company_name, tone, verified_company_context, jd_analysis
+                )
+                refinement["cover_letter_redrafted_after_patch"] = True
+            elif isinstance(cover_letter, BaseException):
+                raise cover_letter
+        else:
+            cover_letter, source_pdf = await asyncio.gather(
+                self.draft_cover_letter(
+                    tailored_cv, company_name, tone, verified_company_context, jd_analysis
+                ),
+                self.convert_docx_to_pdf(docx_source, str(source_pdf_dir)),
+            )
+        performance.checkpoint("cover_letter_generation_and_source_baseline")
         candidate_facts = build_fact_cards(tailored_cv)
         ats_report = _score_application_package(jd_analysis, tailored_cv, cover_letter)
-        source_pdf_dir = Path(output_docx).expanduser().resolve().parent / "source-baseline"
         cover_metadata = _cover_letter_metadata(
-            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis
+            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis,
+            jd_text,
         )
         cover_payload = {
             **cover_letter,
             **cover_metadata,
             "closing": _closing_salutation(cover_letter),
         }
-        source_pdf, cover_pdf = await asyncio.gather(
-            self.convert_docx_to_pdf(docx_source, str(source_pdf_dir)),
-            self.render_and_compile_latex(
-                "cover_letter",
-                cover_payload,
-                page_limit=1,
-                output_dir=Path(output_docx).expanduser().resolve().parent,
-            ),
+        cover_pdf = await self.render_and_compile_latex(
+            "cover_letter",
+            cover_payload,
+            page_limit=1,
+            output_dir=Path(output_docx).expanduser().resolve().parent,
         )
+        performance.checkpoint("cover_letter_pdf_compilation")
         quality_report = await asyncio.to_thread(
             document_quality_report,
             docx_source,
@@ -626,6 +732,7 @@ class ApplicationService:
             "Resume package was generated for inspection but did not pass final verification: "
             f"integrity={integrity_report['passed']}; failed_critics={failed_critics}"
         )
+        performance.checkpoint("quality_and_integrity_checks")
         cover_text_path, cover_md_path = await asyncio.gather(
             asyncio.to_thread(
                 _write_cover_letter_text,
@@ -640,6 +747,7 @@ class ApplicationService:
                 Path(output_docx).with_name(f"{Path(output_docx).stem}-cover-letter.md"),
             ),
         )
+        performance.checkpoint("cover_letter_text_exports")
         ledger_entry = None
         if delivery_verified:
             ledger_entry = record_application(
@@ -652,6 +760,7 @@ class ApplicationService:
                 role_type=jd_analysis.get("role_type"),
                 missing_keywords=_missing_ats_keywords(ats_report),
             )
+            performance.checkpoint("ledger_update")
         if cache and (cached is None or refinement.get("page_retry", {}).get("outcome") == "patch_accepted"):
             cache.store(cache_key, tailored_cv)
         quality_report["integrity_linter"] = integrity_report
@@ -716,6 +825,7 @@ class ApplicationService:
             "tailored_cv": tailored_cv,
             "fact_cards": candidate_facts,
             "ats_report": ats_report,
+            "performance": performance.snapshot(),
         }
 
     async def inject_docx_layout(
@@ -803,6 +913,7 @@ class ApplicationService:
         page_limit: int = 1,
         compile_documents: bool = True,
     ) -> dict[str, Any]:
+        performance = _PerformanceRecorder()
         jd_analysis = await self.analyze_job_description(jd_text, master_cv_json)
         tailored_cv = await self.tailor_resume_content(master_cv_json, jd_analysis)
         cover_letter = await self.draft_cover_letter(
@@ -811,6 +922,7 @@ class ApplicationService:
         documents: dict[str, Any] = {}
         candidate_facts = build_fact_cards(tailored_cv)
         ats_report = _score_application_package(jd_analysis, tailored_cv, cover_letter)
+        performance.checkpoint("jd_analysis_resume_and_cover_generation")
         delivery_verified: bool | None = None
         delivery_warning: str | None = None
         ats_report["rewrite_fidelity"] = tailored_cv.get("strategy", {}).get(
@@ -821,7 +933,8 @@ class ApplicationService:
         )
         letter_date = application_date or datetime.now().astimezone().date().isoformat()
         cover_metadata = _cover_letter_metadata(
-            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis
+            tailored_cv["name"], company_name, letter_date, tailored_cv["contact"], jd_analysis,
+            jd_text,
         )
         if compile_documents:
             resume_payload = {**tailored_cv, "company_name": company_name}
@@ -838,6 +951,7 @@ class ApplicationService:
                     "cover_letter", cover_payload, page_limit, output_dir=run_dir
                 ),
             )
+            performance.checkpoint("parallel_resume_and_cover_compilation")
             documents["resume"] = resume_document
             documents["cover_letter"] = cover_document
             final_resume_payload = documents["resume"].pop("rendered_content", resume_payload)
@@ -913,6 +1027,7 @@ class ApplicationService:
                     f"failed_critics={failed_critics}"
                 )
                 ats_report["ledger_entry"] = None
+        performance.checkpoint("pdf_verification_critics_and_ledger")
         cover_text_path, cover_md_path = await asyncio.gather(
             asyncio.to_thread(
                 _write_cover_letter_text,
@@ -927,6 +1042,7 @@ class ApplicationService:
                 run_dir / f"{slug(tailored_cv['name'])}_Cover_Letter_{slug(company_name)}.md",
             ),
         )
+        performance.checkpoint("cover_letter_text_exports")
         return {
             "run_id": run_id,
             "run_dir": str(run_dir),
@@ -942,5 +1058,6 @@ class ApplicationService:
             "warning": delivery_warning,
             "fact_cards": candidate_facts,
             "ats_report": ats_report,
+            "performance": performance.snapshot(),
         }
 

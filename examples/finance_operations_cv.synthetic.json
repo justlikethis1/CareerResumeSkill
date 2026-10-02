@@ -1,0 +1,41 @@
+{
+  "name": "Example Candidate",
+  "contact": {
+    "email": "example@example.com",
+    "location": "Hong Kong"
+  },
+  "profile": "Finance operations analyst with documented invoice reconciliation and month-end reporting experience.",
+  "sections": [
+    {
+      "type": "experience",
+      "title": "Experience",
+      "items": [
+        {
+          "title": "Finance Operations Analyst",
+          "organization": "Example Services",
+          "location": "Hong Kong",
+          "dates": "2024--2026",
+          "bullets": [
+            "Reconciled 120 supplier invoices each month in Excel against purchase orders and payment records.",
+            "Reduced month-end reconciliation exceptions by 8% by documenting validation checks and resolving mismatches.",
+            "Prepared monthly financial reports and retained supporting records for internal audit review."
+          ]
+        },
+        {
+          "title": "Operations Assistant",
+          "organization": "Example Cooperative",
+          "location": "Hong Kong",
+          "dates": "2022--2024",
+          "bullets": [
+            "Tracked customer payment queries in a shared register and escalated unresolved cases to the finance team.",
+            "Maintained documented handover notes for recurring billing and reconciliation issues."
+          ]
+        }
+      ]
+    }
+  ],
+  "skills": {
+    "Tools": ["Excel"],
+    "Methods": ["Invoice Reconciliation", "Financial Reporting"]
+  }
+}

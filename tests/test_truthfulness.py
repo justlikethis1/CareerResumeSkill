@@ -2,6 +2,7 @@ import pytest
 
 from career_resume_skill.models import GeneratedTailoring, validate_master_cv
 from career_resume_skill.tailoring import (
+    _filter_skill_subset,
     _hydrate_generated_resume,
     _normalize_bullet_punctuation,
     _reject_unverified_company_claims,
@@ -21,6 +22,29 @@ def test_preserves_supported_numeric_claim() -> None:
 def test_rejects_unsupported_numeric_claim() -> None:
     with pytest.raises(ValueError, match="90"):
         validate_truthfulness({"metric": 38}, {"profile": "Reduced usage by 90%."})
+
+
+def test_evidence_identifiers_are_not_numeric_claims_or_metric_evidence() -> None:
+    identifiers = {"source_item_id": "section:0:item:2", "evidence_ids": ["section:0:item:2:bullet:2"]}
+    source = {"profile": "Finance analyst.", "sections": [{"items": [
+        {**identifiers, "bullets": ["Reconciled invoices in Excel."]},
+    ]}]}
+    generated = {"profile": "Finance analyst.", "sections": [{"items": [
+        {**identifiers, "bullets": ["Reconciled invoices in Excel."]},
+    ]}]}
+
+    validate_truthfulness(source, generated)
+    generated["sections"][0]["items"][0]["bullets"] = ["Reconciled invoices for 2 years."]
+    with pytest.raises(ValueError, match="unsupported metrics.*2"):
+        validate_truthfulness(source, generated)
+
+
+def test_numeric_structured_claim_still_fails_with_evidence_identifiers() -> None:
+    source = {"evidence_ids": ["section:0:item:2:bullet:2"], "profile": "Finance analyst."}
+    generated = {"evidence_ids": ["section:0:item:2:bullet:2"], "metric": 2}
+
+    with pytest.raises(ValueError, match="unsupported metrics.*2"):
+        validate_truthfulness(source, generated)
 
 
 @pytest.mark.parametrize("claim", [
@@ -87,6 +111,23 @@ def test_skill_subset_accepts_source_backed_experience_technologies() -> None:
     })
 
 
+def test_skill_filter_drops_unsupported_labels_but_keeps_supported_skills() -> None:
+    cv = validate_master_cv({
+        "name": "Candidate",
+        "contact": {"email": "candidate@example.com"},
+        "sections": [],
+        "skills": {"Languages": ["Python"]},
+    })
+
+    skills, gaps = _filter_skill_subset(cv, {
+        "Languages": ["Python", "English"],
+        "Claims": "Distributed Training",
+    })
+
+    assert skills == {"Languages": ["Python"]}
+    assert gaps == ["English", "Distributed Training"]
+
+
 def test_hydration_caps_generated_bullets_to_item_budget() -> None:
     cv = validate_master_cv({
         "name": "Candidate",
@@ -129,6 +170,38 @@ def test_restore_required_metrics_replaces_metric_dropping_rewrite() -> None:
 
     assert bullets == ["Used a 4-bit model and measured sub-10ms inference latency."]
     assert set(evidence_ids) == {"project-1", "project-1:bullet:0"}
+
+
+def test_restore_metric_uses_available_budget_without_losing_operational_count() -> None:
+    source = [
+        "Reconciled 120 supplier invoices in Excel.",
+        "Reduced month-end exceptions by 8%.",
+    ]
+    bullets, evidence_ids = _restore_required_metrics(
+        source, "finance-1", [source[0]], ["finance-1:bullet:0"], maximum_bullets=2,
+    )
+
+    assert bullets == source
+    assert {"finance-1:bullet:0", "finance-1:bullet:1"} <= set(evidence_ids)
+
+    with pytest.raises(ValueError, match="without dropping a source-backed metric"):
+        _restore_required_metrics(
+            source, "finance-1", [source[0]], ["finance-1:bullet:0"], maximum_bullets=1,
+        )
+
+
+def test_restore_omitted_operational_count_from_source_evidence() -> None:
+    source = [
+        "Reconciled 120 supplier invoices in Excel.",
+        "Reduced month-end exceptions by 8%.",
+    ]
+
+    bullets, evidence_ids = _restore_required_metrics(
+        source, "finance-1", [source[1]], ["finance-1:bullet:1"], maximum_bullets=2,
+    )
+
+    assert bullets == [source[1], source[0]]
+    assert {"finance-1:bullet:0", "finance-1:bullet:1"} <= set(evidence_ids)
 
 
 def test_near_duplicate_bullet_guard_keeps_distinct_sibling_axes() -> None:

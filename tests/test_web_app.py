@@ -46,6 +46,10 @@ class _FakeApplicationService:
                 "preferred_keywords": {"missing": []},
             },
             "gap_analysis": {"gaps": ["No source evidence for CUDA"]},
+            "performance": {
+                "total_seconds": 12.5,
+                "stages_seconds": {"docx_import": 1.25, "cover_letter_generation": 4.0},
+            },
         }
 
     async def generate_application_package(self, **kwargs):
@@ -69,6 +73,10 @@ class _FakeApplicationService:
             "cover_letter_md_path": str(cover_md),
             "ats_report": {"score": 80, "resume_only": {"score": 70}},
             "gap_analysis": {"gaps": []},
+            "performance": {
+                "total_seconds": 6.0,
+                "stages_seconds": {"parallel_resume_and_cover_compilation": 2.5},
+            },
         }
 
 
@@ -124,6 +132,7 @@ def test_local_web_form_generates_docx_artifacts_without_persisting_source_or_ke
         assert result["verified"] is True
         assert result["ats_score"] == 82
         assert result["resume_only_ats_score"] == 74
+        assert result["performance"]["total_seconds"] == 12.5
         assert captured["api_key"] == "one-time-test-key"
         assert "one-time-test-key" not in response.text
         assert not list(output_dir.rglob("source.docx"))
@@ -145,6 +154,7 @@ def test_local_web_form_supports_master_cv_json_track(tmp_path: Path, monkeypatc
         )
         assert response.status_code == 200, response.text
         result = response.json()
+        assert result["performance"]["stages_seconds"]["parallel_resume_and_cover_compilation"] == 2.5
         assert {artifact["id"] for artifact in result["artifacts"]} == {
             "resume_pdf", "cover_letter_pdf", "cover_letter_txt", "cover_letter_md",
         }

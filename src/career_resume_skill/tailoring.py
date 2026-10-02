@@ -35,7 +35,7 @@ from .models import (
     TailoredResume,
     validate_master_cv,
 )
-from .quality import _is_primary_metric
+from .quality import _is_primary_metric, _operational_counts
 from .text_utils import normalize_sentence_ending, normalize_technology_casing
 
 TAILOR_TASK = """Generate a JD-tailored resume JSON from verified evidence.
@@ -129,17 +129,23 @@ Tone: formal, objective, and contribution-focused. Avoid generic or emotional ph
 optimized, benchmarked, mitigated, implemented, or quantified only when the cited work supports the verb.
 Use direct sentences averaging no more than 25 words; avoid informal contractions. Do not invent prestige,
 employers, academic credentials, metrics, technical methods, or company initiatives.
+Numeric claims must match VERIFIED_NUMERIC_CLAIMS_BY_EVIDENCE_ID for a cited evidence ID; if no matching
+source value exists, omit the number. Dates are not evidence of an exact duration: do not calculate years
+of experience from employment dates or invent percentages, counts, or scale from a JD requirement.
 
 Paragraph 1 (50-70 words): hook-first value proposition. Do not begin with "I am applying", "I am writing to
 apply", or "I am interested in". If the opening uses a candidate identity as a modifier, use a grammatically
 complete construction such as "As an AI systems engineer who..." rather than a dangling "An AI systems engineer,
 I...". In the first sentence, identify the target role and the candidate's verified technical/functional identity;
-in the second sentence, surface the strongest directly relevant evidence and its exact verified outcome. Keep any
-application-intent boilerplate to at most one short sentence. State academic status only when verified.
+in the second sentence, surface one strongest directly relevant result as a compact value signal. Do not preview
+the technical story that belongs in Paragraph 2. Keep any application-intent boilerplate to at most one short
+sentence. State academic status only when verified.
 
 Paragraph 2 (140-175 words; accepted 115-195): one cohesive deep-dive story using the two strongest evidence-backed experiences.
-Explain the technical bottleneck, architecture/algorithmic decisions, evidence-supported trade-offs, and exact verified outcomes. Weave in
-JD terminology via semantic_mapping_directives without claiming unverified work. Do not produce a skill list or
+Explain a distinct technical bottleneck, method, evidence-supported trade-off, and verified outcome. Do not repeat
+the headline claim, metric, or a distinctive phrase used in Paragraph 1; use a separate supported result or explain
+the method/evaluation without restating that outcome. Weave in JD terminology via semantic_mapping_directives without
+claiming unverified work. Do not produce a skill list or
 relabel DPO as sparse-reward learning, or time-series forecasting as long-horizon agent trajectory modeling.
 Trade-off reasoning must be grounded in the cited evidence; never invent a loss, reward, entropy objective,
 constraint, or design decision. If the evidence only supports an action and outcome, describe that relationship
@@ -156,6 +162,8 @@ ANTI-REPETITION:
 - Make Paragraph 3 synthesize the candidate's value with fresh wording. Avoid repeating distinctive 6+ word phrases,
   technical constructs, or metrics already used in Paragraphs 1 and 2; maintain conceptual continuity without
   reusing the same sentence frame.
+- Across all paragraphs, do not reuse a distinctive 6+ word sequence or repeat the same metric/result claim.
+    Assign each paragraph a separate job: headline value, technical method, then role/team alignment.
 
 EXACT LEXICON GROUNDING:
 - Prefer one or two exact JD phrases when the cited evidence directly supports their underlying method and result.
@@ -283,7 +291,11 @@ def _flatten(value: Any) -> list[str]:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return [str(value)]
     if isinstance(value, dict):
-        return [text for child in value.values() for text in _flatten(child)]
+        return [
+            text for key, child in value.items()
+            if key != "id" and not key.endswith(("_id", "_ids"))
+            for text in _flatten(child)
+        ]
     if isinstance(value, list):
         return [text for child in value for text in _flatten(child)]
     return []
@@ -292,23 +304,7 @@ def _flatten(value: Any) -> list[str]:
 def validate_truthfulness(source: dict[str, Any], generated: dict[str, Any]) -> None:
     source_text = " ".join(_flatten(source))
     generated_text = " ".join(_flatten(generated))
-    source_years = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", source_text))
-    source_metrics = {normalize_metric(metric) for metric in extract_metrics(source_text)}
-    generated_metrics = extract_metrics(generated_text)
-    unsupported_metrics: set[str] = set()
-    for metric in generated_metrics:
-        if normalize_metric(metric) in source_metrics:
-            continue
-        if metric in {"0", "1"}:
-            continue
-        normalized = metric.lstrip("-")
-        is_date = bool(
-            re.fullmatch(r"\d{1,2}[./-](?:19|20)\d{2}", normalized)
-            or re.fullmatch(r"(?:19|20)\d{2}", normalized)
-        )
-        if is_date and normalized[-4:] in source_years:
-            continue
-        unsupported_metrics.add(metric)
+    unsupported_metrics = _unsupported_numeric_claims(source_text, generated_text)
     if unsupported_metrics:
         raise ValueError(
             f"Generated content contains unsupported metrics: {sorted(unsupported_metrics)}"
@@ -332,6 +328,27 @@ def validate_truthfulness(source: dict[str, Any], generated: dict[str, Any]) -> 
             "Generated content contains unsupported domain projections: "
             f"{unsupported_projections}"
         )
+
+
+def _unsupported_numeric_claims(source_text: str, generated_text: str) -> set[str]:
+    source_years = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", source_text))
+    source_metrics = {normalize_metric(metric) for metric in extract_metrics(source_text)}
+    generated_metrics = extract_metrics(generated_text)
+    unsupported_metrics: set[str] = set()
+    for metric in generated_metrics:
+        if normalize_metric(metric) in source_metrics:
+            continue
+        if metric in {"0", "1"}:
+            continue
+        normalized = metric.lstrip("-")
+        is_date = bool(
+            re.fullmatch(r"\d{1,2}[./-](?:19|20)\d{2}", normalized)
+            or re.fullmatch(r"(?:19|20)\d{2}", normalized)
+        )
+        if is_date and normalized[-4:] in source_years:
+            continue
+        unsupported_metrics.add(metric)
+    return unsupported_metrics
 
 
 def _unsupported_technology_claims(source_text: str, generated_text: str) -> set[str]:
@@ -402,6 +419,41 @@ def verify_rewrite_fidelity(
                     }
                 )
     return findings
+
+
+def _restore_unsupported_numeric_claims(cv: MasterCV, result: dict[str, Any]) -> list[str]:
+    restored: list[str] = []
+    source_text = " ".join(_flatten(cv.model_dump()))
+    if _unsupported_numeric_claims(source_text, result["profile"]):
+        result["profile"] = cv.profile
+        restored.append("Restored source profile after unsupported numeric claim")
+    source_items = {
+        item.source_item_id or f"section:{section_index}:item:{item_index}": item
+        for section_index, section in enumerate(cv.sections)
+        for item_index, item in enumerate(section.items)
+    }
+    for section in result["sections"]:
+        for item in section["items"]:
+            source_item = source_items[item["source_item_id"]]
+            item_source = " ".join(_flatten(source_item.model_dump()))
+            for index, bullet in enumerate(item["bullets"]):
+                if not _unsupported_numeric_claims(item_source, bullet):
+                    continue
+                if not source_item.bullets:
+                    continue
+                bullet_tokens = set(re.findall(r"\b\w+\b", bullet.casefold()))
+                closest = max(
+                    source_item.bullets,
+                    key=lambda original: len(bullet_tokens & set(
+                        re.findall(r"\b\w+\b", original.casefold())
+                    )),
+                )
+                item["bullets"][index] = closest
+                restored.append(
+                    f"Restored source bullet after unsupported numeric claim: "
+                    f"{item['source_item_id']}:{index}"
+                )
+    return restored
 
 
 async def tailor_resume(
@@ -489,29 +541,51 @@ async def tailor_resume(
                 )
                 if unsupported:
                     unsupported_by_item[item_id] = sorted(unsupported)
-        if not unsupported_by_item and not untranslated_items:
+        result["profile"] = normalize_technology_casing(
+            result["profile"], " ".join(record.text for record in evidence_index)
+        )
+        candidate_claims = {
+            key: result.get(key)
+            for key in ("profile", "sections", "skills")
+            if key in result
+        }
+        unsupported_metrics_error = None
+        try:
+            validate_truthfulness(master_data, candidate_claims)
+        except ValueError as error:
+            if not str(error).startswith("Generated content contains unsupported metrics:"):
+                raise
+            unsupported_metrics_error = error
+        if not unsupported_by_item and not untranslated_items and unsupported_metrics_error is None:
             break
         if attempt == 1:
             if unsupported_by_item:
                 raise ValueError(
                     f"Generated content contains unverified tools/technologies: {unsupported_by_item}"
                 )
-            raise ValueError(f"Chinese resume requires Chinese text in every generated bullet: {untranslated_items}")
+            if untranslated_items:
+                raise ValueError(
+                    f"Chinese resume requires Chinese text in every generated bullet: {untranslated_items}"
+                )
+            if unsupported_metrics_error is not None:
+                restored = _restore_unsupported_numeric_claims(validated_cv, result)
+                if not restored:
+                    raise unsupported_metrics_error
+                candidate_claims = {
+                    key: result.get(key) for key in ("profile", "sections", "skills")
+                    if key in result
+                }
+                validate_truthfulness(master_data, candidate_claims)
+                result["evidence_gaps"].extend(restored)
+                break
         task += (
             "\n\nRewrite only claims supported by each source item's own evidence. "
             "Do not transfer a skill from the global skills list to an item without item-level proof. "
             f"Unsupported terms by source_item_id: {unsupported_by_item}. "
-            f"Items with non-Chinese bullets to rewrite in Simplified Chinese: {untranslated_items}."
+            f"Items with non-Chinese bullets to rewrite in Simplified Chinese: {untranslated_items}. "
+            f"Unsupported numeric claims: {unsupported_metrics_error}. "
+            "Remove unsupported counts and derived years of experience; retain every original verified metric."
         )
-    result["profile"] = normalize_technology_casing(
-        result["profile"], " ".join(record.text for record in evidence_index)
-    )
-    candidate_claims = {
-        key: result.get(key)
-        for key in ("profile", "sections", "skills")
-        if key in result
-    }
-    validate_truthfulness(master_data, candidate_claims)
     if jd_analysis.get("resume_language") != "zh_CN":
         result["strategy"]["rewrite_fidelity"] = verify_rewrite_fidelity(
             validated_cv, result, jd_analysis.get("item_bullet_budgets", {})
@@ -519,6 +593,26 @@ async def tailor_resume(
     result["gap_analysis"] = gap_analysis
     result["model_used"] = client.model_name
     return TailoredResume.model_validate(result).model_dump()
+
+
+def _remove_unsupported_metric_sentences(
+    paragraphs: list[str], source: dict[str, Any]
+) -> tuple[list[str], list[str]] | None:
+    source_text = " ".join(_flatten(source))
+    source_metrics = {normalize_metric(metric) for metric in extract_metrics(source_text)}
+    revised: list[str] = []
+    gaps: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        kept: list[str] = []
+        for sentence in re.split(r"(?<=[.!?])\s+", paragraph.strip()):
+            if not _unsupported_numeric_claims(source_text, sentence):
+                kept.append(sentence)
+                continue
+            if any(normalize_metric(metric) in source_metrics for metric in extract_metrics(sentence)):
+                return None
+            gaps.append(f"Removed unsupported numeric sentence from paragraph {index + 1}")
+        revised.append(" ".join(kept))
+    return (revised, gaps) if gaps else None
 
 
 async def draft_cover(
@@ -549,23 +643,89 @@ async def draft_cover(
             ),
             "EVIDENCE_INDEX": [record.model_dump() for record in evidence_index],
             "FACT_CARDS": build_fact_cards(validated_cv),
+            "VERIFIED_NUMERIC_CLAIMS_BY_EVIDENCE_ID": {
+                record.evidence_id: sorted({
+                    normalize_metric(metric) for metric in extract_metrics(record.text)
+                }, key=str.casefold)
+                for record in evidence_index if extract_metrics(record.text)
+            },
             "EXACT_SUPPORTED_JD_PHRASES": _supported_exact_jd_phrases(
                 jd_analysis, " ".join(fact["text"] for fact in build_fact_cards(validated_cv))
             ),
     }
+    all_evidence_text = " ".join(record.text for record in evidence_index)
     for attempt in range(2):
         generated = await client.complete_json(
             task, payload, CoverLetterDraft, temperature=0.45 if attempt == 0 else 0.25
         )
         critic_issues = CoverLetterCritic.audit(generated.paragraphs).issues
-        if not critic_issues:
+        unsupported_technologies = _unsupported_technology_claims(
+            all_evidence_text, " ".join(generated.paragraphs)
+        )
+        unsupported_metrics_error = None
+        try:
+            validate_truthfulness(source, {
+                "salutation": generated.salutation,
+                "paragraphs": generated.paragraphs,
+                "closing": generated.closing,
+            })
+        except ValueError as error:
+            if not str(error).startswith("Generated content contains unsupported metrics:"):
+                raise
+            unsupported_metrics_error = error
+        if not critic_issues and unsupported_metrics_error is None and not unsupported_technologies:
             break
         if attempt == 1:
-            raise ValueError("Cover letter critic failed: " + "; ".join(critic_issues))
-        task += (
-            "\n\nRewrite the entire cover letter while preserving cited facts and word budgets. Fix: "
-            + "; ".join(critic_issues)
-        )
+            if critic_issues:
+                raise ValueError("Cover letter critic failed: " + "; ".join(critic_issues))
+            if unsupported_metrics_error is not None:
+                if unsupported_technologies:
+                    raise unsupported_metrics_error
+                removal = _remove_unsupported_metric_sentences(generated.paragraphs, source)
+                if removal is None:
+                    raise unsupported_metrics_error
+                revised_paragraphs, gaps = removal
+                try:
+                    generated = CoverLetterDraft.model_validate({
+                        **generated.model_dump(), "paragraphs": revised_paragraphs,
+                        "evidence_gaps": [*generated.evidence_gaps, *gaps],
+                    })
+                except ValueError:
+                    raise unsupported_metrics_error from None
+                if CoverLetterCritic.audit(generated.paragraphs).issues:
+                    raise unsupported_metrics_error
+                validate_truthfulness(source, {
+                    "salutation": generated.salutation,
+                    "paragraphs": generated.paragraphs,
+                    "closing": generated.closing,
+                })
+                break
+            raise ValueError(
+                "Cover letter contains technologies absent from cited evidence: "
+                f"{sorted(unsupported_technologies)}"
+            )
+        if critic_issues:
+            task += (
+                "\n\nRewrite the entire cover letter while preserving cited facts and word budgets. Fix: "
+                + "; ".join(critic_issues)
+            )
+        if unsupported_metrics_error is not None:
+            task += (
+                "\n\nRemove unsupported numeric claims and derived durations. "
+                "Keep every original verified metric and cited fact. "
+                f"Problem: {unsupported_metrics_error}."
+            )
+        if unsupported_technologies:
+            task += (
+                "\n\nRemove technologies not found in the candidate's source evidence: "
+                f"{sorted(unsupported_technologies)}. Do not claim tools merely because the JD requests them."
+            )
+        if any(issue.startswith("cross_paragraph_repetition:") for issue in critic_issues):
+            task += (
+                " Rewrite the later paragraph named by each repetition issue around a different "
+                "evidence-backed result or technical method. Do not just synonym-swap the repeated phrase, "
+                "and do not repeat the same metric or central claim across paragraphs."
+            )
     result = generated.model_dump()
     result["paragraphs"] = [
         re.sub(
@@ -695,14 +855,18 @@ def _hydrate_generated_resume(
         if section.type in hydrated_by_source_type
         and not any(previous.type == section.type for previous in cv.sections[:section_index])
     ]
-    _validate_skill_subset(cv, generated.skills)
+    supported_skills, unsupported_skills = _filter_skill_subset(cv, generated.skills)
+    evidence_gaps = list(generated.evidence_gaps)
+    evidence_gaps.extend(
+        f"Removed unsupported skill label: {skill}" for skill in unsupported_skills
+    )
     return {
         "name": cv.name,
         "contact": cv.contact.model_dump(),
         "profile": generated.profile,
         "sections": hydrated_sections,
-        "skills": generated.skills,
-        "evidence_gaps": generated.evidence_gaps,
+        "skills": supported_skills,
+        "evidence_gaps": list(dict.fromkeys(evidence_gaps)),
         "strategy": generated.strategy,
     }
 
@@ -715,18 +879,22 @@ def _restore_required_metrics(
     *,
     maximum_bullets: int | None,
 ) -> tuple[list[str], list[str]]:
-    """Restore source bullets when a model rewrite drops a required primary metric."""
+    """Restore source bullets when a rewrite drops a protected metric or workload count."""
+    def required_metrics(bullet: str) -> set[str]:
+        return _operational_counts(bullet) | {
+            normalize_metric(metric) for metric in extract_metrics(bullet)
+            if _is_primary_metric(metric)
+        }
+
     source_metrics = {
-        normalize_metric(metric)
+        metric
         for bullet in source_bullets
-        for metric in extract_metrics(bullet)
-        if _is_primary_metric(metric)
+        for metric in required_metrics(bullet)
     }
     generated_metrics = {
-        normalize_metric(metric)
+        metric
         for bullet in bullets
-        for metric in extract_metrics(bullet)
-        if _is_primary_metric(metric)
+        for metric in required_metrics(bullet)
     }
     missing = source_metrics - generated_metrics
     if not missing:
@@ -737,46 +905,36 @@ def _restore_required_metrics(
     source_candidates = [
         (index, bullet)
         for index, bullet in enumerate(source_bullets)
-        if missing & {
-            normalize_metric(metric)
-            for metric in extract_metrics(bullet)
-            if _is_primary_metric(metric)
-        }
+        if missing & required_metrics(bullet)
     ]
     for source_index, source_bullet in source_candidates:
         if not missing:
             break
-        source_bullet_metrics = {
-            normalize_metric(metric)
-            for metric in extract_metrics(source_bullet)
-            if _is_primary_metric(metric)
-        }
+        source_bullet_metrics = required_metrics(source_bullet)
         if not (missing & source_bullet_metrics):
             continue
         source_evidence_id = f"{source_item_id}:bullet:{source_index}"
         if source_bullet in restored:
             missing -= source_bullet_metrics
             continue
-        replacement_index = next(
-            (
-                index for index, bullet in enumerate(restored)
-                if not {
-                    normalize_metric(metric)
-                    for metric in extract_metrics(bullet)
-                    if _is_primary_metric(metric)
-                }
-            ),
-            len(restored) - 1,
-        )
-        if replacement_index >= 0:
-            if maximum_bullets is not None and not restored and maximum_bullets < 1:
-                break
-            if restored:
-                restored[replacement_index] = source_bullet
-            else:
-                restored.append(source_bullet)
-            restored_evidence.extend([source_item_id, source_evidence_id])
-            missing -= source_bullet_metrics
+        if maximum_bullets is None or len(restored) < maximum_bullets:
+            restored.append(source_bullet)
+        else:
+            replacement_index = next(
+                (
+                    index for index, bullet in enumerate(restored)
+                    if not required_metrics(bullet)
+                ),
+                None,
+            )
+            if replacement_index is None:
+                raise ValueError(
+                    f"Unable to restore required metrics for {source_item_id} without "
+                    "dropping a source-backed metric or operational count"
+                )
+            restored[replacement_index] = source_bullet
+        restored_evidence.extend([source_item_id, source_evidence_id])
+        missing -= source_bullet_metrics
     if missing:
         raise ValueError(
             f"Unable to restore required metrics for {source_item_id}: {sorted(missing)}"
@@ -784,7 +942,10 @@ def _restore_required_metrics(
     return restored, list(dict.fromkeys(restored_evidence))
 
 
-def _validate_skill_subset(cv: MasterCV, generated_skills: dict[str, list[str] | str]) -> None:
+def _filter_skill_subset(
+    cv: MasterCV,
+    generated_skills: dict[str, list[str] | str],
+) -> tuple[dict[str, list[str] | str], list[str]]:
     source_skills = {
         normalize_technology(skill)
         for values in cv.skills.values()
@@ -802,17 +963,24 @@ def _validate_skill_subset(cv: MasterCV, generated_skills: dict[str, list[str] |
     source_technologies = {
         normalize_technology(term) for term in extract_technologies(source_text)
     }
-    generated = {
-        skill
-        for values in generated_skills.values()
-        for skill in ([values] if isinstance(values, str) else values)
-    }
-    unsupported = {
-        skill for skill in generated
-        if normalize_technology(skill) not in source_skills
-        and normalize_technology(skill) not in source_technologies
-        and not _source_mentions_skill(skill, source_text)
-    }
+    supported: dict[str, list[str] | str] = {}
+    unsupported: list[str] = []
+    for group, values in generated_skills.items():
+        generated_values = [values] if isinstance(values, str) else values
+        approved = [
+            skill for skill in generated_values
+            if normalize_technology(skill) in source_skills
+            or normalize_technology(skill) in source_technologies
+            or _source_mentions_skill(skill, source_text)
+        ]
+        unsupported.extend(skill for skill in generated_values if skill not in approved)
+        if approved:
+            supported[group] = approved[0] if isinstance(values, str) else approved
+    return supported, list(dict.fromkeys(unsupported))
+
+
+def _validate_skill_subset(cv: MasterCV, generated_skills: dict[str, list[str] | str]) -> None:
+    _, unsupported = _filter_skill_subset(cv, generated_skills)
     if unsupported:
         raise ValueError(f"Generated skills are not present in Master CV: {sorted(unsupported)}")
 

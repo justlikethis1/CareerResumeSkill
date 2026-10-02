@@ -21,6 +21,17 @@ def test_casing_normalization_respects_source_and_symbol_boundaries() -> None:
     )
 
 
+def test_lever_product_name_does_not_claim_ordinary_english_noun() -> None:
+    assert "lever" not in extract_technologies("Use this lever to reduce the measured delay.")
+    assert "lever" in extract_technologies("Configured Lever as the applicant tracking system.")
+    assert normalize_technology_casing(
+        "Use this lever carefully.", "Use the lever in the mechanism."
+    ) == "Use this lever carefully."
+    assert normalize_technology_casing(
+        "Configured lever for recruiting.", "Configured Lever for recruiting."
+    ) == "Configured Lever for recruiting."
+
+
 def test_ats_report_separates_exact_semantic_and_missing_terms() -> None:
     report = score_ats(
         {

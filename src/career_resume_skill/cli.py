@@ -22,6 +22,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--docx-template", type=Path, help="Source DOCX resume for the DOCX track.")
     parser.add_argument("--output-docx", type=Path, help="Destination DOCX path for the DOCX track.")
     parser.add_argument(
+        "--docx-layout-strategy", choices=("baseline", "fast"), default="fast",
+        help="DOCX PDF layout order: baseline preserves original-first, fast tries compact-first.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help="Stable delivery directory for reports and generated LaTeX runs; overrides CAREER_SKILL_OUTPUT_DIR.",
@@ -92,6 +96,7 @@ async def _run(arguments: argparse.Namespace) -> dict[str, Any]:
             verified_company_context=company_context,
             resume_language=arguments.resume_language,
             application_date=arguments.application_date,
+            layout_strategy=arguments.docx_layout_strategy,
         )
     assert master_cv is not None
     return await service.generate_application_package(

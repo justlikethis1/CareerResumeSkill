@@ -103,6 +103,7 @@ def _summary(result: dict[str, Any], track: str, artifact_paths: dict[str, str])
         "missing_keywords": list(dict.fromkeys(missing))[:12],
         "evidence_gaps": gaps[:12] if isinstance(gaps, list) else [],
         "warning": result.get("warning"),
+        "performance": result.get("performance", {}),
         "artifacts": [
             {"id": key, "name": Path(path).name, "label": key.replace("_", " ").title()}
             for key, path in artifact_paths.items()

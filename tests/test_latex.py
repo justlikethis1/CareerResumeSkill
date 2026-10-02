@@ -1,6 +1,10 @@
+import shutil
+import subprocess
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
+from pypdf import PdfReader
 
 from career_resume_skill import latex
 from career_resume_skill.latex import (
@@ -62,6 +66,88 @@ def test_render_resume_escapes_content(tmp_path: Path) -> None:
     assert r"38\%" in rendered
 
 
+def test_resume_variable_length_locations_keep_right_edge(tmp_path: Path) -> None:
+    if shutil.which("pdftotext") is None:
+        pytest.skip("PDF word bounding boxes need pdftotext")
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    tex = render_template("resume", {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "profile": "", "sections": [{"title": "Experience", "items": [{
+            "title": "Analyst", "dates": "2025",
+            "organization": "Very Long Research and Development Organization Serving Several Regions and Teams",
+            "location": "Zhejiang, China", "bullets": [],
+        }, {
+            "title": "Engineer", "dates": "2026", "organization": "Research Institute",
+            "location": "Jiaxing, Zhejiang, Peoples Republic of China", "bullets": [],
+        }]}], "skills": {},
+    }, tmp_path / "resume.tex")
+    pdf = compile_latex(tex, page_limit=1)
+    pages, text = extract_pdf_text(pdf["pdf_path"])
+    bbox = subprocess.run(
+        [shutil.which("pdftotext"), "-bbox", pdf["pdf_path"], "-"],
+        capture_output=True, text=True, check=True,
+    )
+    words = [word for word in ET.fromstring(bbox.stdout.encode()).iter()
+             if word.tag.endswith("word")]
+    right_edges = [float(word.attrib["xMax"]) for word in words if word.text == "China"]
+
+    assert pages == 1 and "extbf" not in text and "extit" not in text
+    assert len(right_edges) == 2 and abs(right_edges[0] - right_edges[1]) < 2
+    long_location_tail = next(word for word in words if word.text == "China" and
+                              float(word.attrib["xMax"]) == right_edges[1])
+    assert float(long_location_tail.attrib["xMin"]) > 350
+
+
+def test_resume_omits_empty_organization_location_row(tmp_path: Path) -> None:
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    tex = render_template("resume", {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "profile": "", "sections": [{"title": "Projects", "items": [{
+            "title": "Independent Project", "dates": "2026", "organization": "",
+            "location": "", "bullets": ["Built a Python tool."],
+        }]}], "skills": {},
+    }, tmp_path / "resume.tex")
+    rendered = tex.read_text(encoding="utf-8")
+    assert r"\resumeSubheadingSingle{Independent Project}{2026}" in rendered
+    pdf = compile_latex(tex, page_limit=1)
+    positions: dict[str, float] = {}
+
+    def collect(text, cm, tm, font, size):
+        for label in ("Independent Project", "Built a Python tool"):
+            if label in text:
+                positions[label] = cm[5] + tm[5]
+
+    PdfReader(pdf["pdf_path"]).pages[0].extract_text(visitor_text=collect)
+
+    assert pdf["pages"] == 1
+    assert len(positions) == 2
+    assert 0 < positions["Independent Project"] - positions["Built a Python tool"] < 18
+
+
+def test_resume_omits_empty_skill_groups_and_heading(tmp_path: Path) -> None:
+    base = {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "profile": "", "sections": [],
+    }
+    mixed = render_template("resume", {
+        **base, "skills": {"Tools": ["Python"], "Unused": [], "Methods": ""},
+    }, tmp_path / "mixed.tex").read_text(encoding="utf-8")
+    empty = render_template("resume", {
+        **base, "skills": {"Unused": [], "Methods": ""},
+    }, tmp_path / "empty.tex").read_text(encoding="utf-8")
+
+    assert r"\resumeSection{Skills}" in mixed
+    assert r"\textbf{Tools:} Python" in mixed
+    assert "Unused:" not in mixed and "Methods:" not in mixed
+    assert r"\resumeSection{Skills}" not in empty
+
+
 def test_render_cover_letter_escapes_content_and_requires_date(tmp_path: Path) -> None:
     output = render_template(
         "cover_letter",
@@ -84,6 +170,76 @@ def test_render_cover_letter_escapes_content_and_requires_date(tmp_path: Path) -
     assert r"38\%" in rendered
     assert r"C++ and C\_CUDA" in rendered
     assert r"Motivation \$5 \#1" in rendered
+
+
+def test_cover_letter_renders_cjk_subject_without_missing_glyphs(tmp_path: Path) -> None:
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    tex = render_template("cover_letter", {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "date": "October 2, 2026", "recipient_title": "Hiring Committee",
+        "company_name": "MiniMax", "subject_line": "RE: Application for 大模型推理研发实习生 - Candidate",
+        "salutation": "Dear Hiring Team,",
+        "paragraphs": ["Documented research.", "Built a Python evaluation workflow.", "Welcome a discussion."],
+        "closing": "Sincerely",
+    }, tmp_path / "cjk-cover.tex")
+    try:
+        pdf = compile_latex(tex, page_limit=1)
+    except RuntimeError as error:
+        if "CJK font unavailable" in str(error):
+            pytest.skip("No CJK font installed")
+        raise
+    pages, text = extract_pdf_text(pdf["pdf_path"])
+
+    assert pages == 1
+    assert "大模型推理研发实习生" in text
+    assert "Missing character" not in pdf["log"]
+
+
+def test_resume_renders_cjk_candidate_and_bullet_without_missing_glyphs(tmp_path: Path) -> None:
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    tex = render_template("resume", {
+        "name": "候选人", "contact": {"email": "candidate@example.com", "location": "香港"},
+        "profile": "具备有来源的 Python 模型评估经验。",
+        "sections": [{"title": "项目经历", "items": [{
+            "title": "模型评估", "dates": "2025", "organization": "研究团队", "location": "香港",
+            "bullets": ["使用 Python 完成模型评估。"],
+        }]}], "skills": {},
+    }, tmp_path / "cjk-resume.tex")
+    try:
+        pdf = compile_latex(tex, page_limit=1)
+    except RuntimeError as error:
+        if "CJK font unavailable" in str(error):
+            pytest.skip("No CJK font installed")
+        raise
+    pages, text = extract_pdf_text(pdf["pdf_path"])
+
+    assert pages == 1
+    assert "候选人" in text and "使用 Python 完成模型评估" in text
+    assert "Missing character" not in pdf["log"]
+
+
+def test_compile_rejects_missing_font_glyph_instead_of_silent_pdf(tmp_path: Path) -> None:
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    tex = render_template("cover_letter", {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "date": "October 2, 2026", "recipient_title": "Hiring Committee",
+        "company_name": "Example", "subject_line": "Application for 🦄 Research",
+        "salutation": "Dear Team,",
+        "paragraphs": ["Documented research.", "Built a Python evaluation workflow.", "Welcome a discussion."],
+        "closing": "Sincerely",
+    }, tmp_path / "unsupported-glyph.tex")
+
+    with pytest.raises(RuntimeError, match="missing glyphs"):
+        compile_latex(tex, page_limit=1)
 
 
 def test_page_budget_prunes_lowest_scored_bullet_first() -> None:
@@ -131,6 +287,22 @@ def test_prune_low_priority_resume_does_not_remove_primary_metric_bullets() -> N
         "Measured sub-10ms latency.",
     ]
     assert action is not None
+
+
+def test_prune_low_priority_resume_preserves_operational_case_count() -> None:
+    content = {
+        "sections": [{"items": [{
+            "source_item_id": "support",
+            "bullets": ["Resolved 95 customer cases.", "Documented team handovers."],
+            "evidence_ids": ["support:0", "support:1"],
+        }]}],
+        "strategy": {"item_scores": {"support": 1}},
+    }
+
+    pruned, action = prune_low_priority_resume(content)
+
+    assert pruned["sections"][0]["items"][0]["bullets"] == ["Resolved 95 customer cases."]
+    assert action is not None and "Documented team handovers" in action
 
 
 def test_prune_low_priority_resume_removes_non_metric_bullet_before_metric_tail() -> None:
@@ -207,6 +379,40 @@ def test_business_letter_and_resume_compile_to_extractable_single_page(tmp_path:
         if tex == cover:
             assert "extbf" not in text
             assert "Candidate" in text
+            positions: list[tuple[str, float, float]] = []
+
+            def collect_signature(value, cm, tm, font, size, output=positions):
+                if "Sincerely" in value or value.strip() == "Candidate":
+                    output.append((value.strip(), tm[4] + cm[4], tm[5] + cm[5]))
+
+            PdfReader(pdf["pdf_path"]).pages[0].extract_text(visitor_text=collect_signature)
+            closing_x = next(x for value, x, y in positions if value.startswith("Sincerely"))
+            signature_x = min(x for value, x, y in positions if value == "Candidate")
+            assert abs(signature_x - closing_x) < 1
         if tex == resume:
             assert "10⁻⁶" in text
             assert "1.2μs" in text
+
+
+def test_cover_letter_wraps_long_words_without_automatic_hyphenation(tmp_path: Path) -> None:
+    try:
+        find_compiler()
+    except RuntimeError:
+        pytest.skip("No LaTeX compiler installed")
+    sentence = "Documented interoperability and reproducibility for teams."
+    tex = render_template("cover_letter", {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "date": "October 2, 2026", "recipient_title": "Hiring Committee",
+        "company_name": "Example", "subject_line": "RE: Application for Engineering",
+        "salutation": "Dear Hiring Team,",
+        "paragraphs": [" ".join([sentence] * count) for count in (9, 25, 11)],
+        "closing": "Sincerely",
+    }, tmp_path / "cover-letter.tex")
+    pdf = compile_latex(tex, page_limit=1)
+    pages, text = extract_pdf_text(pdf["pdf_path"])
+
+    assert pages == 1
+    assert "interoperability" in text
+    assert "interoper-\nability" not in text
+    assert "reproduci-\nbility" not in text
+    assert "Overfull" not in pdf["log"]

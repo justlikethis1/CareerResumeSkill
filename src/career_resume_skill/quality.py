@@ -181,10 +181,26 @@ def _is_primary_metric(metric: str) -> bool:
     )
 
 
+_OPERATIONAL_COUNT_RE = re.compile(
+    r"\b(?P<count>\d[\d,]*)(?:\s+(?:supplier|customer|support|payment))?\s+"
+    r"(?:invoices?|cases?|tickets?|orders?|transactions?|customers?)\b",
+    re.IGNORECASE,
+)
+
+
+def _operational_counts(text: str) -> set[str]:
+    return {normalize_metric(match.group("count")) for match in _OPERATIONAL_COUNT_RE.finditer(text)}
+
+
+def _has_operational_count(text: str) -> bool:
+    return bool(_OPERATIONAL_COUNT_RE.search(text))
+
+
 def check_linear_text_stream(
     source_items: list[dict[str, Any]], pdf_text: str, bullet_texts: list[str] | None = None
 ) -> dict[str, Any]:
     def normalize(text: str) -> str:
+        text = re.sub(r"(?<=[A-Za-z])(?=\d{2}[./-](?:19|20)\d{2}\b)", " ", text)
         return " ".join(re.findall(r"\w+", text.casefold()))
 
     lines = [normalize(line) for line in pdf_text.splitlines() if normalize(line)]
@@ -299,14 +315,16 @@ def pdf_visual_metrics(pdf_path: str | Path) -> dict[str, Any]:
 
         def visit_text(
             text: str,
-            _cm: Any,
+            cm: Any,
             text_matrix: Any,
             _font: Any,
             _size: Any,
             page_text_y: list[float] = text_y,
         ) -> None:
-            if text.strip() and len(text_matrix) > 5:
-                page_text_y.append(float(text_matrix[5]))
+            if text.strip() and len(cm) > 5 and len(text_matrix) > 5:
+                page_text_y.append(
+                    float(text_matrix[4] * cm[1] + text_matrix[5] * cm[3] + cm[5])
+                )
 
         page.extract_text(visitor_text=visit_text)
         bottommost = min(text_y) if text_y else None
@@ -323,7 +341,7 @@ def pdf_visual_metrics(pdf_path: str | Path) -> dict[str, Any]:
             }
         )
     return {
-        "method": "pypdf text-matrix estimate; visual heuristic, not pixel-accurate rendering",
+        "method": "pypdf combined text/graphics-matrix estimate; visual heuristic, not pixel-accurate rendering",
         "pages": page_metrics,
     }
 

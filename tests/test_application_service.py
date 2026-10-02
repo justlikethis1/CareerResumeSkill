@@ -10,7 +10,9 @@ import pytest
 from career_resume_skill.application import (
     ApplicationService,
     _candidate_technology_source_text,
+    _cover_letter_metadata,
     _failed_content_critics,
+    _PerformanceRecorder,
     _score_application_package,
 )
 from career_resume_skill.cli import _parser, _read_inputs
@@ -33,6 +35,22 @@ class _UnavailableProvider:
         raise AssertionError("fallback test must not call the provider")
 
 
+@pytest.mark.parametrize("jd_text, expected_title", [
+    ("大模型推理研发实习生\n公司：MiniMax\n职位描述", "大模型推理研发实习生"),
+    ("Job Title: Systems Engineer\nBuild reliable services.", "Systems Engineer"),
+    ("职位描述\n参与大模型推理框架设计与研发。", "AI Research"),
+])
+def test_cover_letter_subject_uses_only_explicit_jd_role(
+    jd_text: str, expected_title: str
+) -> None:
+    metadata = _cover_letter_metadata(
+        "Candidate", "MiniMax", "2026-10-02", {"email": "candidate@example.com"},
+        {"role_type": "ai_research"}, jd_text,
+    )
+
+    assert metadata["subject_line"] == f"RE: Application for {expected_title} - Candidate"
+
+
 def test_cli_accepts_docx_application_track(tmp_path: Path) -> None:
     source = tmp_path / "resume.docx"
     jd_file = tmp_path / "jd.txt"
@@ -47,6 +65,7 @@ def test_cli_accepts_docx_application_track(tmp_path: Path) -> None:
     assert jd_source == "A public-role JD"
     assert master_cv is None
     assert args.track == "docx"
+    assert args.docx_layout_strategy == "fast"
 
 
 def test_cli_docx_track_forwards_application_date(monkeypatch, tmp_path: Path) -> None:
@@ -65,6 +84,7 @@ def test_cli_docx_track_forwards_application_date(monkeypatch, tmp_path: Path) -
         "--track", "docx", "--docx-template", str(tmp_path / "source.docx"),
         "--output-docx", str(tmp_path / "tailored.docx"), "--jd", "JD text",
         "--company", "Example", "--date", "2026-04-08",
+        "--docx-layout-strategy", "baseline",
     ])
 
     result = asyncio.run(resume_cli._run(arguments))
@@ -72,6 +92,7 @@ def test_cli_docx_track_forwards_application_date(monkeypatch, tmp_path: Path) -
     assert result["application_date"] == "2026-04-08"
     assert result["docx_source"] == str(tmp_path / "source.docx")
     assert result["output_docx"] == str(tmp_path / "tailored.docx")
+    assert result["layout_strategy"] == "baseline"
 
 
 def test_compile_calls_can_progress_concurrently(monkeypatch, tmp_path: Path) -> None:
@@ -104,20 +125,31 @@ def test_compile_calls_can_progress_concurrently(monkeypatch, tmp_path: Path) ->
     assert elapsed < 0.14
 
 
-def test_docx_jd_analysis_overlaps_local_layout_measurement(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("layout_strategy", ["baseline", "fast"])
+def test_docx_jd_analysis_overlaps_local_layout_measurement(
+    monkeypatch, tmp_path: Path, layout_strategy: str
+) -> None:
     from career_resume_skill import application
 
     service = ApplicationService(
         Settings(output_dir=str(tmp_path)), provider=_UnavailableProvider()
     )
     layout_started = threading.Event()
+    source_pdf_started = threading.Event()
 
     async def fake_import(_: str) -> dict[str, object]:
         return {"master_cv": {}, "source_item_map": {}}
 
     async def fake_analyze(*_: object) -> dict[str, object]:
         assert await asyncio.to_thread(layout_started.wait, 0.75)
+        if layout_strategy == "fast":
+            assert await asyncio.to_thread(source_pdf_started.wait, 0.75)
         return {}
+
+    async def fake_convert(*_: object) -> dict[str, str]:
+        source_pdf_started.set()
+        await asyncio.sleep(0.05)
+        return {"pdf_path": str(tmp_path / "source.pdf")}
 
     def fake_layout(_: str) -> dict[str, object]:
         layout_started.set()
@@ -129,6 +161,7 @@ def test_docx_jd_analysis_overlaps_local_layout_measurement(monkeypatch, tmp_pat
 
     monkeypatch.setattr(service, "import_docx_master_cv", fake_import)
     monkeypatch.setattr(service, "analyze_job_description", fake_analyze)
+    monkeypatch.setattr(service, "convert_docx_to_pdf", fake_convert)
     monkeypatch.setattr(application, "calculate_docx_layout_budget", fake_layout)
     monkeypatch.setattr(application, "allocate_item_bullet_budgets", stop_after_parallel_inputs)
 
@@ -136,11 +169,58 @@ def test_docx_jd_analysis_overlaps_local_layout_measurement(monkeypatch, tmp_pat
     with pytest.raises(RuntimeError, match="reached post-analysis allocation"):
         asyncio.run(service.generate_docx_application_package(
             "source.docx", "JD", str(tmp_path / "out.docx"), "Example",
+            layout_strategy=layout_strategy,
         ))
     elapsed = time.perf_counter() - started
 
     assert layout_started.is_set()
+    assert source_pdf_started.is_set() == (layout_strategy == "fast")
     assert elapsed < 0.5
+
+
+def test_fast_docx_source_pdf_overlaps_tailoring_and_finishes_on_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from career_resume_skill import application
+
+    service = ApplicationService(Settings(output_dir=str(tmp_path)), provider=_UnavailableProvider())
+    source_started = asyncio.Event()
+    tailoring_started = asyncio.Event()
+    source_finished = asyncio.Event()
+
+    async def fake_source_pdf(*args):
+        source_started.set()
+        await asyncio.wait_for(tailoring_started.wait(), 0.5)
+        source_finished.set()
+        return {"pdf_path": str(tmp_path / "source.pdf")}
+
+    async def fake_tailor(*args):
+        assert source_started.is_set()
+        tailoring_started.set()
+        raise RuntimeError("tailoring stopped")
+
+    async def fake_import(*args):
+        return {
+            "master_cv": {"name": "Candidate", "contact": {"email": "candidate@example.com"},
+                          "sections": [], "skills": {}},
+            "source_item_map": {},
+        }
+
+    async def fake_analyze(*args):
+        return {}
+
+    monkeypatch.setattr(service, "import_docx_master_cv", fake_import)
+    monkeypatch.setattr(service, "analyze_job_description", fake_analyze)
+    monkeypatch.setattr(service, "tailor_resume_content", fake_tailor)
+    monkeypatch.setattr(service, "convert_docx_to_pdf", fake_source_pdf)
+    monkeypatch.setattr(application, "calculate_docx_layout_budget", lambda *args: {"paragraphs": []})
+    monkeypatch.setattr(application, "allocate_item_bullet_budgets", lambda *args: {})
+
+    with pytest.raises(RuntimeError, match="tailoring stopped"):
+        asyncio.run(service.generate_docx_application_package(
+            "source.docx", "JD", str(tmp_path / "out.docx"), "Example", layout_strategy="fast",
+        ))
+    assert source_finished.is_set()
 
 
 def test_resume_render_returns_content_after_page_pruning(monkeypatch, tmp_path: Path) -> None:
@@ -250,8 +330,17 @@ def test_application_package_uses_pruned_resume_for_metadata_and_integrity(
     assert integrity_bullets == [final_bullets, []]
 
 
+@pytest.mark.parametrize("layout_strategy, expected_levels, output_pages, patch_accepted, first_draft_fails, source_lines", [
+    ("baseline", [0, 1, 2, 2], 2, False, False, 30),
+    ("fast", [2, 2], 2, False, False, 30),
+    ("fast", [2], 1, False, False, 30),
+    ("fast", [2, 2, 2], 2, True, False, 30),
+    ("fast", [2, 2, 2], 2, True, True, 30),
+    ("fast", [0, 1, 2, 2], 2, False, False, 6),
+])
 def test_docx_package_returns_cover_letter_and_reports_when_resume_overflows(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, layout_strategy: str, expected_levels: list[int],
+    output_pages: int, patch_accepted: bool, first_draft_fails: bool, source_lines: int,
 ) -> None:
     from career_resume_skill import application
 
@@ -271,13 +360,29 @@ def test_docx_package_returns_cover_letter_and_reports_when_resume_overflows(
     }
     source_docx = tmp_path / "source.docx"
     source_docx.write_bytes(b"source")
-    service = ApplicationService(Settings(output_dir=str(tmp_path)), provider=_UnavailableProvider())
+    class _PatchProvider(_UnavailableProvider):
+        available = True
+
+    service = ApplicationService(
+        Settings(output_dir=str(tmp_path)),
+        provider=_PatchProvider() if patch_accepted else _UnavailableProvider(),
+    )
 
     async def async_value(value):
         return value
 
     monkeypatch.setattr(service, "import_docx_master_cv", lambda path: async_value(imported))
-    monkeypatch.setattr(application, "calculate_docx_layout_budget", lambda *args: {"paragraphs": []})
+    if patch_accepted:
+        monkeypatch.setattr(
+            service, "analyze_job_description",
+            lambda jd, cv: async_value({
+                **application.analyze_job_description_local(jd),
+                "source": "inline", "model_used": "deterministic_fallback",
+            }),
+        )
+    monkeypatch.setattr(application, "calculate_docx_layout_budget", lambda *args: {
+        "paragraphs": [{"paragraph_id": "mock:unmapped", "estimated_source_lines": source_lines}],
+    })
     monkeypatch.setattr(service, "tailor_resume_content", lambda cv, jd: async_value({
         **cv,
         "sections": [{"type": "projects", "title": "Projects", "items": [{
@@ -287,35 +392,67 @@ def test_docx_package_returns_cover_letter_and_reports_when_resume_overflows(
         "evidence_gaps": [], "strategy": {}, "gap_analysis": {"gaps": []},
         "model_used": "deterministic_fallback",
     }))
-    monkeypatch.setattr(application, "refine_one_bullet", lambda *args, **kwargs: async_value({
-        "states": ["INGESTION", "PROJECTION", "GEOMETRIC_EVALUATION"],
-        "outcome": "offline_no_patch",
-    }))
+    async def fake_refine(cv, *args, **kwargs):
+        if kwargs.get("page_overflow") and patch_accepted:
+            cv["sections"][0]["items"][0]["bullets"] = ["Built a verified Python API."]
+            return {"outcome": "patch_accepted"}
+        return {
+            "states": ["INGESTION", "PROJECTION", "GEOMETRIC_EVALUATION"],
+            "outcome": "offline_no_patch",
+        }
+
+    monkeypatch.setattr(application, "refine_one_bullet", fake_refine)
     monkeypatch.setattr(application, "lint_payload_bullets", lambda *args, **kwargs: {
         "passed": True, "missing_metrics": [], "invalid_bullet_indices": [],
         "private_use_codepoints": [],
     })
 
+    attempted_levels = []
+
     def fake_inject(source, output, groups, **kwargs):
+        attempted_levels.append(kwargs["compact_level"])
         Path(output).write_bytes(b"tailored")
         return Path(output)
+
+    source_baseline_started = threading.Event()
+    cover_started = asyncio.Event()
+    resume_conversion_started = asyncio.Event()
 
     monkeypatch.setattr(application, "inject_docx_bullet_groups", fake_inject)
 
     async def fake_convert(path, output_dir=None):
-        pdf_path = Path(path).with_suffix(".pdf")
+        if output_dir and "source-baseline" in output_dir:
+            source_baseline_started.set()
+        elif layout_strategy == "fast":
+            resume_conversion_started.set()
+            await asyncio.wait_for(cover_started.wait(), 0.5)
+        pdf_path = Path(output_dir or Path(path).parent) / Path(path).with_suffix(".pdf").name
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
         pdf_path.write_bytes(b"pdf")
         return {"pdf_path": str(pdf_path)}
 
     monkeypatch.setattr(service, "convert_docx_to_pdf", fake_convert)
     monkeypatch.setattr(application, "extract_pdf_text", lambda path: (
-        (1, "Source resume.") if "source-baseline" in str(path) else (2, "Tailored resume with Python.")
+        (1, "Source resume.") if "source-baseline" in str(path) else
+        (output_pages, "Tailored resume with Python.")
     ))
-    monkeypatch.setattr(service, "draft_cover_letter", lambda *args, **kwargs: async_value({
-        "salutation": "Dear Hiring Team,", "paragraphs": ["First.", "Second.", "Third."],
-        "closing": "Regards", "evidence_ids": ["project-1:bullet:0"],
-        "evidence_gaps": [], "model_used": "deterministic_fallback",
-    }))
+    drafted_bullets = []
+
+    async def fake_draft_cover(cv, *args, **kwargs):
+        drafted_bullets.append(cv["sections"][0]["items"][0]["bullets"][:])
+        cover_started.set()
+        assert await asyncio.to_thread(source_baseline_started.wait, 0.5)
+        if layout_strategy == "fast":
+            await asyncio.wait_for(resume_conversion_started.wait(), 0.5)
+        if first_draft_fails and len(drafted_bullets) == 1:
+            raise ValueError("first draft failed")
+        return {
+            "salutation": "Dear Hiring Team,", "paragraphs": ["First.", "Second.", "Third."],
+            "closing": "Regards", "evidence_ids": ["project-1:bullet:0"],
+            "evidence_gaps": [], "model_used": "deterministic_fallback",
+        }
+
+    monkeypatch.setattr(service, "draft_cover_letter", fake_draft_cover)
     async def fake_render_letter(*args, **kwargs):
         cover_pdf = tmp_path / "cover-letter.pdf"
         cover_pdf.write_bytes(b"pdf")
@@ -323,27 +460,51 @@ def test_docx_package_returns_cover_letter_and_reports_when_resume_overflows(
 
     monkeypatch.setattr(service, "render_and_compile_latex", fake_render_letter)
     monkeypatch.setattr(application, "document_quality_report", lambda *args, **kwargs: {
-        "pages": {"source": 1, "output": 2},
+        "pages": {"source": 1, "output": output_pages},
         "pdf": {"output": {"characters": 32}},
         "visual_layout": {}, "diagnosis": {},
         "ats_readability": {"ats_readability_flags": []},
     })
-    monkeypatch.setattr(application, "record_application", lambda *args, **kwargs: pytest.fail(
-        "Unverified page-overflow package must not be written to the delivery ledger"
-    ))
+    ledger_calls = []
+
+    def fake_record(*args, **kwargs):
+        ledger_calls.append((args, kwargs))
+        return {"recorded": True}
+
+    monkeypatch.setattr(application, "record_application", fake_record)
 
     package = asyncio.run(service.generate_docx_application_package(
-        str(source_docx), "Python role", str(tmp_path / "output.docx"), "Example Co"
+        str(source_docx), "Python role", str(tmp_path / "output.docx"), "Example Co",
+        layout_strategy=layout_strategy,
     ))
 
-    assert package["verified"] is False
-    assert "did not pass final verification" in package["warning"]
-    assert package["quality_report"]["integrity_linter"]["checks"]["page_budget"]["actual"] == 2
+    assert attempted_levels == expected_levels
+    assert package["refinement"]["layout_heuristic"]["initial_compact_level"] == expected_levels[0]
+    assert drafted_bullets == (
+        [["Built a Python API."], ["Built a verified Python API."]]
+        if patch_accepted else [["Built a Python API."]]
+    )
+    assert package["refinement"].get("cover_letter_redrafted_after_patch", False) is patch_accepted
+    assert package["refinement"]["applied_compact_level"] == expected_levels[-1]
+    assert package["refinement"]["layout_heuristic"]["strategy"] == (
+        "adaptive_compact_first" if layout_strategy == "fast" else "conservative_ascending_fallback"
+    )
+    assert [attempt["level"] for attempt in package["refinement"]["pdf_attempts"]] == expected_levels
+    assert all(attempt["seconds"] >= 0 for attempt in package["refinement"]["pdf_attempts"])
+    assert package["verified"] is (output_pages == 1)
+    if output_pages == 2:
+        assert "did not pass final verification" in package["warning"]
+    else:
+        assert package["warning"] is None
+    assert package["quality_report"]["integrity_linter"]["checks"]["page_budget"]["actual"] == output_pages
     assert Path(package["cover_letter_pdf"]["pdf_path"]).is_file()
     assert Path(package["cover_letter_text_path"]).is_file()
     assert Path(package["cover_letter_md_path"]).is_file()
-    assert package["ats_report"]["delivery_verified"] is False
-    assert package["ledger_entry"] is None
+    assert package["ats_report"]["delivery_verified"] is (output_pages == 1)
+    assert len(ledger_calls) == int(output_pages == 1)
+    assert package["ledger_entry"] == ({"recorded": True} if output_pages == 1 else None)
+    assert "cover_letter_generation_and_source_baseline" in package["performance"]["stages_seconds"]
+    assert "cover_letter_pdf_compilation" in package["performance"]["stages_seconds"]
 
 
 def test_delivery_gate_includes_failed_content_critics() -> None:
@@ -352,6 +513,16 @@ def test_delivery_gate_includes_failed_content_critics() -> None:
         "resume_content_critic": {"passed": True},
     }) == ["cover_letter_critic"]
     assert not _failed_content_critics({"cover_letter_critic": {"passed": True}})
+
+
+def test_performance_recorder_contains_only_nonnegative_stage_durations() -> None:
+    recorder = _PerformanceRecorder()
+    recorder.checkpoint("local_stage")
+    report = recorder.snapshot()
+
+    assert report["total_seconds"] >= 0
+    assert report["stages_seconds"]["local_stage"] >= 0
+    assert sum(report["stages_seconds"].values()) <= report["total_seconds"] + 0.001
 
 
 def test_integrity_source_includes_candidate_profile_links_as_technology_provenance() -> None:
@@ -401,6 +572,8 @@ def test_application_runs_get_unique_output_directories(tmp_path: Path) -> None:
 
     assert first["run_id"] != second["run_id"]
     assert first["run_dir"] != second["run_dir"]
+    assert first["performance"]["total_seconds"] >= 0
+    assert "pdf_verification_critics_and_ledger" in first["performance"]["stages_seconds"]
     assert Path(first["run_dir"]).is_dir()
     assert Path(second["run_dir"]).is_dir()
     cover_text = Path(first["cover_letter_text_path"]).read_text(encoding="utf-8")

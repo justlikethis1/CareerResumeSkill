@@ -44,9 +44,16 @@ def _technology_term_pattern(term: str) -> str:
 _TECH_RE = re.compile(
     r"(?<![\w+])(?:" + "|".join(
         _technology_term_pattern(term)
-        for term in sorted(_TECHNOLOGIES, key=len, reverse=True)
+        for term in sorted(
+            (term for term in _TECHNOLOGIES if term != "Lever"),
+            key=len,
+            reverse=True,
+        )
     ) + r")(?![\w+])",
     re.IGNORECASE,
+)
+_CASE_SENSITIVE_TECH_RE = re.compile(
+    r"(?<![\w+])Lever(?![\w+])"
 )
 _RANDOM_FOREST_ABBREVIATION_RE = re.compile(
     r"(?<![\w])(?:XGBoost\s*/\s*RF|RF\s*/\s*XGBoost)(?![\w])",
@@ -67,6 +74,8 @@ _HALLUCINATION_PATTERNS = {
 
 def extract_technologies(text: str) -> set[str]:
     technologies = {match.group(0).casefold() for match in _TECH_RE.finditer(text)}
+    if _CASE_SENSITIVE_TECH_RE.search(text):
+        technologies.add("lever")
     if _RANDOM_FOREST_ABBREVIATION_RE.search(text):
         technologies.add("random forest")
     return technologies

@@ -168,6 +168,7 @@
     .result-status.pass { color: #155b3c; background: #e8f4eb; }
     .result-status.review { color: var(--warning); background: #fff1e3; }
     .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+    .metric-wide { grid-column: 1 / -1; }
     .metric { padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; }
     .metric span { display: block; color: var(--muted); font-size: 11px; }
     .metric strong { display: block; margin-top: 3px; font-size: 18px; }
@@ -274,7 +275,12 @@
               <div class="metric"><span>求职信页数</span><strong id="letter-pages">-</strong></div>
               <div class="metric"><span>申请包覆盖分</span><strong id="ats-score">-</strong></div>
               <div class="metric"><span>简历覆盖分</span><strong id="resume-score">-</strong></div>
+              <div class="metric metric-wide"><span>本次生成耗时</span><strong id="generation-time">-</strong></div>
             </div>
+            <details class="result-section performance-details">
+              <summary>查看阶段耗时</summary>
+              <ul id="performance-list"></ul>
+            </details>
             <section class="result-section"><h3>待核对的职位要求</h3><ul id="missing-list"></ul></section>
             <section class="result-section"><h3>证据缺口</h3><ul id="gap-list"></ul></section>
             <section class="result-section"><h3>文件</h3><div id="downloads" class="downloads"></div></section>
@@ -378,6 +384,32 @@
       document.querySelector("#letter-pages").textContent = data.cover_letter_pages ?? "未编译";
       document.querySelector("#ats-score").textContent = data.ats_score ?? "-";
       document.querySelector("#resume-score").textContent = data.resume_only_ats_score ?? "-";
+      const performance = data.performance || {};
+      document.querySelector("#generation-time").textContent = Number.isFinite(performance.total_seconds)
+        ? `${performance.total_seconds.toFixed(2)} 秒`
+        : "未记录";
+      const stageLabels = {
+        docx_import: "导入 Word 简历",
+        jd_analysis_and_layout_budget: "职位分析与版式测量",
+        tailoring_cache_refinement_and_preflight: "简历改写与事实预检",
+        resume_injection_and_pdf_attempts: "简历排版与 PDF 验证",
+        cover_letter_generation: "求职信生成",
+        source_baseline_and_cover_pdf: "基线转换与求职信编译",
+        quality_and_integrity_checks: "质量与完整性检查",
+        ledger_update: "投递记录",
+        jd_analysis_resume_and_cover_generation: "分析与内容生成",
+        parallel_resume_and_cover_compilation: "简历/求职信并行编译",
+        pdf_verification_critics_and_ledger: "PDF 验证与质量检查",
+        cover_letter_text_exports: "文本附件导出",
+      };
+      const performanceList = document.querySelector("#performance-list");
+      performanceList.replaceChildren();
+      for (const [stage, seconds] of Object.entries(performance.stages_seconds || {})) {
+        const item = document.createElement("li");
+        const duration = Number(seconds);
+        item.textContent = `${stageLabels[stage] || stage}: ${Number.isFinite(duration) ? duration.toFixed(2) : "-"} 秒`;
+        performanceList.append(item);
+      }
       fillList(document.querySelector("#missing-list"), data.missing_keywords);
       fillList(document.querySelector("#gap-list"), data.evidence_gaps);
       const downloads = document.querySelector("#downloads");

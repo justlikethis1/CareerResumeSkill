@@ -40,6 +40,39 @@ def test_docx_tree_sanitizer_removes_body_tabs_but_preserves_style_alignment() -
     assert style_tab.get(_w("leader")) is None
 
 
+def test_docx_tree_sanitizer_keeps_right_aligned_location_not_trailing_bullet_tab() -> None:
+    document = ET.Element(_w("document"))
+    body = ET.SubElement(document, _w("body"))
+    for company, separator, location in (
+        ("First Company", "               ", "Zhejiang, China"),
+        ("Second Company", None, "Zhejiang, China"),
+        ("Trailing body tab", None, None),
+    ):
+        paragraph = ET.SubElement(body, _w("p"))
+        tabs = ET.SubElement(ET.SubElement(paragraph, _w("pPr")), _w("tabs"))
+        tab = ET.SubElement(tabs, _w("tab"))
+        tab.set(_w("val"), "right")
+        tab.set(_w("pos"), "9000")
+        ET.SubElement(ET.SubElement(paragraph, _w("r")), _w("t")).text = company
+        run = ET.SubElement(paragraph, _w("r"))
+        if separator:
+            ET.SubElement(run, _w("t")).text = separator
+        else:
+            ET.SubElement(run, _w("tab"))
+        if location:
+            ET.SubElement(ET.SubElement(paragraph, _w("r")), _w("t")).text = location
+
+    DocxTreeSanitizer.sanitize_document(document)
+
+    paragraphs = body.findall(_w("p"))
+    for paragraph in paragraphs[:2]:
+        assert len(paragraph.findall(f".//{_w('r')}/{_w('tab')}")) == 1
+        assert len(paragraph.findall(f"{_w('pPr')}/{_w('tabs')}/{_w('tab')}")) == 1
+        assert "Zhejiang, China" in "".join(paragraph.itertext())
+    assert not paragraphs[2].findall(f".//{_w('r')}/{_w('tab')}")
+    assert paragraphs[2].find(f"{_w('pPr')}/{_w('tabs')}") is None
+
+
 def test_typography_linter_blocks_trailing_dash_artifacts() -> None:
     passed, issues = TypographyLinter.check_pdf_typography(
         "Clean sentence.\nRendered artifact.-----\n16-bit model."

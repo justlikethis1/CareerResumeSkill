@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from career_resume_skill.quality import (
@@ -6,6 +8,7 @@ from career_resume_skill.quality import (
     document_quality_report,
     lint_output_integrity,
     lint_payload_bullets,
+    pdf_visual_metrics,
 )
 
 
@@ -23,6 +26,23 @@ def test_quality_metrics_do_not_flag_normal_hyphenated_words() -> None:
 
     assert metrics["hyphen_space_hyphen"] == 0
     assert metrics["soft_hyphen"] == 0
+
+
+def test_pdf_visual_metrics_uses_graphics_translation_for_cover_text(monkeypatch) -> None:
+    from career_resume_skill import quality
+
+    class ShiftedPage:
+        mediabox = SimpleNamespace(height=800)
+
+        def extract_text(self, *, visitor_text):
+            visitor_text("Signature", [1, 0, 0, 1, 72, 770], [1, 0, 0, 1, 0, -557], None, 11)
+
+    monkeypatch.setattr(quality, "PdfReader", lambda path: SimpleNamespace(pages=[ShiftedPage()]))
+
+    report = pdf_visual_metrics("cover.pdf")["pages"][0]
+
+    assert report["bottommost_text_y_pt"] == 213
+    assert report["estimated_bottom_whitespace_ratio"] == 0.2662
 
 
 def test_quality_metrics_detect_trailing_dash_lines() -> None:
@@ -239,6 +259,16 @@ def test_ats_text_stream_accepts_ordered_repeated_titles() -> None:
     result = check_linear_text_stream(
         items, "Engineer\nBuilt reliable APIs.\nEngineer\nImproved throughput.",
         ["Built reliable APIs.", "Improved throughput."],
+    )
+
+    assert result["ats_readability_flags"] == []
+
+
+def test_ats_text_stream_accepts_date_separated_from_source_title() -> None:
+    items = [{"title": "Project 985 & Double First-Class University09.2022-06.2026"}]
+
+    result = check_linear_text_stream(
+        items, "Project 985 & Double First-Class University 09.2022-06.2026",
     )
 
     assert result["ats_readability_flags"] == []

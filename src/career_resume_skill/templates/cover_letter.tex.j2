@@ -1,8 +1,12 @@
 \documentclass[11pt,a4paper]{article}
 \usepackage{fontspec}
-\setmainfont{DejaVu Serif}
+<% if contains_cjk %>\IfFontExistsTF{Noto Sans CJK SC}{\setmainfont{Noto Sans CJK SC}}{%
+\IfFontExistsTF{Microsoft YaHei}{\setmainfont{Microsoft YaHei}}{\PackageError{career-resume-skill}{CJK font unavailable}{Install Noto Sans CJK SC or Microsoft YaHei}}}
+<% else %>\setmainfont{DejaVu Serif}<% endif %>
 \usepackage{microtype}
-\emergencystretch=1.5em
+\emergencystretch=3em
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
 \usepackage[hidelinks]{hyperref}
 <% if compact == 0 %>\usepackage[margin=0.75in]{geometry}<% elif compact == 1 %>\usepackage[margin=0.68in]{geometry}<% else %>\usepackage[margin=0.60in]{geometry}<% endif %>
 \pagestyle{empty}
@@ -30,7 +34,7 @@
 <% for paragraph in paragraphs %><< paragraph >>
 
 <% endfor %><< closing >>,\\
-\vspace{22pt}
+\vspace{22pt}%
 \csname textbf\endcsname{<< name >>}<% if contact.get('linkedin') or contact.get('github') %>\\
 {\small <% if contact.get('linkedin') %>\href{<< contact.linkedin >>}{LinkedIn}<% endif %><% if contact.get('linkedin') and contact.get('github') %> $\vert$ <% endif %><% if contact.get('github') %>\href{<< contact.github >>}{GitHub}<% endif %>}<% endif %>
 \end{document}

@@ -33,7 +33,7 @@
 | LLM 简历 Bullet 重写 | **需要** | 调用 `DEEPSEEK_API_KEY` |
 | LLM Cover Letter 定制 | **需要** | 调用 `DEEPSEEK_API_KEY` |
 | LaTeX 源码渲染 | 不需要 | 本地模板和转义 |
-| PDF 编译 | 不需要 API Key | 模板使用 `fontspec`，需要 `tectonic`、`xelatex` 或 `lualatex` |
+| PDF 编译 | 不需要 API Key | 模板使用 `fontspec`，需要 `tectonic`、`xelatex` 或 `lualatex`；含中文时还需要 Noto Sans CJK SC 或 Microsoft YaHei 字体 |
 
 本地凭证只放在根目录 `.env`，该文件已被 `.gitignore` 忽略。请编辑 [`.env`](.env) 填入真实值；不要把 Key 写入源码、MCP JSON、README、测试、报告或聊天记录。仓库中提交的是 [`.env.example`](.env.example)，其中不含凭证。
 
@@ -58,15 +58,29 @@
 
 | `generate_docx_application_package` | 原始 `.docx`、JD、输出路径、公司名、语气、公司背景 | 基于原 Word 模板的 Resume DOCX/PDF + 针对 JD 的 Cover Letter PDF |
 
-DOCX 注入还会经过 `docx_sanitizer.py`：词法层清理不可见字符和尾部填充，OOXML 层删除正文 tab 并禁用样式 leader；Harness 将 PDF 抽取文本中的连续尾部破折号作为硬失败。
+DOCX 注入还会经过 `docx_sanitizer.py`：词法层清理不可见字符和尾部填充，OOXML 层清除普通正文的 tab 并禁用样式 leader；具有明确右对齐制表位且 tab 后有文本的公司/地点标题保留对齐，独立长空格分隔符改为右对齐 tab。Harness 将 PDF 抽取文本中的连续尾部破折号作为硬失败。
+
+实习与项目经历的地点始终以行的右侧制表位为锚点：DOCX 当组织名与长地点按字体宽度估算不足以留出至少 12pt 间距时，在地点前有界换行，地点仍靠右；短地点保持同排。LaTeX 简历使用独立的左右列，长组织名在左列、长地点在右列各自换行，二者不会挤到同一列；最终仍以实际 PDF 单页验证为准。LaTeX 简历与 Cover Letter 均禁用英文单词的自动跨行断词，并通过有界的应急行宽避免长词挤出右边界；PDF 单页和指标校验仍不放松。
+
+LaTeX 简历仅在经历确有组织或地点时渲染第二行，空技能分组不产生空标题。求职信主题优先使用 JD 开头明确写出的岗位名称（如 `Job Title:` 或简短的岗位标题行），否则回退到职位类别；含中文的 LaTeX 简历或求职信选择已安装的 CJK 字体，没有可用字体或编译日志报告缺字时明确失败，不交付看似成功但实际缺字的 PDF。字体与排版调整均需通过单页实际 PDF 编译。
+
+教育经历若在同一原始 DOCX 段落中用长空格排出学校/地点和学位/日期两行，宽度判断只测日期 tab 前当前视觉行的学位文字；不再错误地把学校与地点也算进去并为日期另加空行。回填后的日期仍靠右，与学位同一行，并位于上一行地点的正下方。
 
 JD 分析只注册 `analyze_job_description` 一个 MCP 工具；旧 `analyze_target_jd` 别名已移除。公网 URL 的每一跳都会重新校验 DNS 结果，并将连接固定到已校验的数值 IP，同时使用原 hostname 完成 TLS SNI/证书校验。
 
 申请包同时返回 `ats_report`（Resume + Cover Letter 的硬技能/优选词精确与语义覆盖、缺项，并保留 `resume_only` 子报告用于单独查看简历缺口）和 `fact_cards`（事实原文、技术词、已验证数字及 Evidence ID）。中文长句要求会保留在 `excluded_non_atomic_requirements` 审计字段中，不作为单个 ATS 关键词计分；直接 ATS 评分也会再次执行原子短语过滤，避免绕过应用层分析。DOCX 注入前每个 item 的 bullet 列表受 `item_bullet_budgets` 硬截断，fidelity 回退只做原地替换。ATS 分数是本申请包的透明关键词覆盖启发式值，不代表任何商业 ATS 排名或录用概率；现实 ATS 对求职信的计分权重各异，因此同时保留 Resume-only 子报告，且不会以虚构补词提升分数。PDF 交付前还会运行 Integrity Linter：单页预算、被引用证据中的指标不变性、未授权技术/高危黑名单、尾部破折号和私有区字形。
 
+申请包报告的 `performance` 字段记录 `total_seconds` 与 `stages_seconds` 固定阶段耗时，用于定位模型、DOCX 排版/PDF 编译和质检耗时；仅包含阶段名与数值，不记录 JD、简历正文、API Key 或模型响应。DOCX `fast` 模式的 `jd_analysis_and_layout_budget` 与 `tailoring_cache_refinement_and_preflight` 与原件 PDF 转换并行，`source_baseline_wait` 是定制后仍需等待原件转换的时间；`resume_injection_and_pdf_attempts` 含与首次 PDF 导出重叠的求职信首稿时间，`cover_letter_generation_and_source_baseline` 只计候选验证后仍需执行的工作（可能为零）。`refinement.initial_cover_and_pdf_overlap_seconds` 记录从两项任务同时启动到都完成的墙钟时间，并非精确的共同运行时长，不能与 PDF 耗时相加。若超页后的证据补丁被接受，首稿会丢弃并根据最终简历重写，`refinement.cover_letter_redrafted_after_patch` 标记该情况。
+
+PDF 的底部留白诊断会合成文字矩阵与图形变换矩阵；忽略后者会把部分 LaTeX 求职信的实际签名位置误报为负坐标或零留白。该诊断只用于视觉评估，不以简历的 3%–10% 目标强制约束正式求职信的留白。
+
 求职信严格为三段；Pydantic 校验段落词数区间为 45-80、115-195、50-90，总计防御区间为 210-350 词，提示目标仍为 280-340 词。技术段和结尾段下限各比先前放宽 5 词，用于容纳模型计数波动；总下限等于三个段落硬下限之和，不额外要求填充。证据、技术和指标校验仍然严格。申请包同时生成 UTF-8 纯文本和 Markdown，并分别通过 `cover_letter_text_path` 与 `cover_letter_md_path` 返回路径。模型生成的简历和求职信只对来源证据中出现的技术词规范大小写；词表在 `src/career_resume_skill/technology_terms.json`，不会把 JD 里的新工具加入候选人事实。求职信签名由模板排版，PDF 测试会拦截 `extbf` 字样泄漏。示例配置在 `src/career_resume_skill/templates/few_shots.json`，高危术语在 `src/career_resume_skill/hallucination_blacklist.json`；修改配置后需通过 Schema/事实测试。新增岗位原型仍需扩展 Pydantic 的 `role_type` 枚举。
 
-DOCX 申请包经历 `INGESTION → PROJECTION → GEOMETRIC_EVALUATION → DOCX_INJECTION → HEADLESS_VERIFICATION`；预渲染几何仅评估，不因单条偏长就截断。版式恢复采用保守的 level 0→1→2 自底向上试探：先保留原生样式，只有实际 PDF 超页才升级到 level 1，再必要时升级到 level 2，避免精简内容被过度压实。level 1 收紧继承段落间距与行距，level 2 使用 215 twips 行距并有界收缩上下页边距，同时保留标题 `keepNext` 和最小呼吸间距。视觉底部留白 3%~10% 视为舒适区；若严格 level 2 仍无法单页，仅允许放松标题额外间距作为可审计兜底，不放松证据、指标或页数门禁。随后才进入 `TARGETED_RE_RANKING`：优先选择可节省行数的 Tier 3/Tier 2 bullet，一次只缩短一条，再从原始 DOCX 注入并终验。若补丁丢失来源指标、已知技术、引入未经验证的数字、违反 Level 1 保真或没有减少占宽，则拒绝并保留原文。模型不可用时不伪造微调；重试仍非单页则阻断交付。`refinement` 返回状态轨迹。
+模型生成的无来源数字在简历和求职信的现有两轮重写窗口内只能按来源修正，不能直接放行。求职信模型现在接收按 evidence ID 列出的来源数字，并被明确禁止从任职日期推算年限或采用仅在 JD 出现的指标；这只是生成约束，不替代最终校验。真实性扫描排除 `source_item_id`、`evidence_ids` 等机器标识，避免把 `bullet:2` 错判为经历指标，但正文和结构化数值字段仍严格检查。若简历第二轮仍有无来源数字，只恢复受影响的来源 profile 或对应经历 bullet，写入 `evidence_gaps` 后再次运行全局真实性校验。求职信第二轮仍带无来源数字时，仅允许移除不含任何来源指标的完整句子，且必须重新通过三段词数、Critic、技术来源和最终真实性校验；否则仍拒绝交付。来源中带明确业务对象的工作量（如发票、工单、客户 case 数）与百分比等指标一样，进入相应经历的保留预算和 LaTeX 超页裁剪保护；预算不足以同时保留时会失败，不静默覆盖。同输入的财务岗位端到端路径已通过实时 API 测试；持续虚构数字后的删句回退在该次运行中未触发，仍仅有离线验证。
+
+DOCX 申请包经历 `INGESTION → PROJECTION → GEOMETRIC_EVALUATION → DOCX_INJECTION → HEADLESS_VERIFICATION`；预渲染几何仅评估，不因单条偏长就截断。默认 `fast` 策略对拥挤模板先尝试 level 2；当原件 PDF 为 1 页且源段落估算总行数不超过 25 行时先试 level 0，若定制后超页则依次尝试 level 1/2。原有 `baseline` 始终按 level 0→1→2 试探，优先保留原生样式。几何阈值只是节省尝试的启发式判断，不代替实际 PDF 单页验证；需要优先保留复杂模板视觉间距时请选 `baseline`。level 1 收紧继承段落间距与行距，level 2 使用 215 twips 行距并有界收缩上下页边距，同时保留标题 `keepNext` 和最小呼吸间距。视觉底部留白 3%~10% 视为舒适区；若严格 level 2 仍无法单页，仅允许放松标题额外间距作为可审计兜底，不放松证据、指标或页数门禁。随后才进入 `TARGETED_RE_RANKING`：优先选择可节省行数的 Tier 3/Tier 2 bullet，一次只缩短一条，再从原始 DOCX 注入并终验。若补丁丢失来源指标、已知技术、引入未经验证的数字、违反 Level 1 保真或没有减少占宽，则拒绝并保留原文。模型不可用时不伪造微调；重试仍非单页则阻断交付。`refinement.pdf_attempts` 记录各候选的紧凑级别、实际页数和转换耗时，不含简历正文。
+
+CLI 回退到原版式顺序：在 DOCX 生成命令后附加 `--docx-layout-strategy baseline`；省略该参数即使用 `fast`。MCP 工具 `generate_docx_application_package` 可传 `layout_strategy="baseline"`，Python 服务方法也接受相同参数。两种模式均执行相同的证据、页数、Critic 和 Integrity 门禁；基线实现仍可直接调用，不需要覆盖优化版输出。`fast` 会将原始 DOCX 的基线 PDF 转换与 JD 分析及简历定制重叠，再将求职信首稿与首个简历候选 PDF 转换重叠；简历候选转换之间仍顺序进行。草稿使用简历快照，若后续单条 bullet 修补被接受则重新生成，不会交付基于旧版简历的信。
 
 超页时会在临时目录生成 level 1/2 候选，不把 `-compact`、`-compact-deep` 或 `-retry` 中间文件泄漏到交付目录；最终通过的候选会原子复制到配置的 `output_docx` 及同名 PDF。只有重新导出的 PDF 确实变成单页才采用，否则再进入单条文字微调。这是有界尝试，不保证某个比例的超页都能吸收。Pillow 的 `orphan_words` 会标记英文 bullet 末行仅有 1–2 词，供局部修补参考，不会自动往句尾填充文本。
 
@@ -125,7 +139,7 @@ Remove-Item $zip -Force
 
 ### 本机网页向导（Windows）
 
-双击仓库根目录的 `start_career_resume_web.bat`。首次启动会创建项目虚拟环境并安装 Python 依赖，随后自动打开本机网页；之后再次双击即可使用。默认端口为 `8765`，若被占用会自动保留下一个可用的本机端口并打开对应页面。网页仅绑定 `127.0.0.1`，不会向局域网开放。API Key 可在表单中临时输入，也可使用本机 `.env` 中已配置的 Key；表单 Key 不写入文件、浏览器存储或 URL。简历原件在生成期间放入临时目录，生成文件保存在本机 `output/web/`。LaTeX PDF 需要 Tectonic/XeLaTeX/LuaLaTeX；DOCX 转 PDF 需要 Word 或 LibreOffice，网页会报告环境错误但不会绕过质量门禁。
+双击仓库根目录的 `start_career_resume_web.bat`。首次启动会创建项目虚拟环境并安装 Python 依赖，随后自动打开本机网页；之后再次双击即可使用。默认端口为 `8765`，若被占用会自动保留下一个可用的本机端口并打开对应页面。网页仅绑定 `127.0.0.1`，不会向局域网开放。API Key 可在表单中临时输入，也可使用本机 `.env` 中已配置的 Key；表单 Key 不写入文件、浏览器存储或 URL。简历原件在生成期间放入临时目录，生成文件保存在本机 `output/web/`。LaTeX PDF 需要 Tectonic/XeLaTeX/LuaLaTeX；DOCX 转 PDF 需要 Word 或 LibreOffice，网页会报告环境错误但不会绕过质量门禁。生成报告含仅由阶段名和秒数组成的 `performance` 诊断，不含简历、JD、Key 或模型响应。
 
 当前网页模式由 DeepSeek API（或 `.env` 中配置的 OpenAI-compatible 服务）执行模型生成。仅向 AI 上传 `SKILL.md` 不会让 MCP 后端自动使用该 AI 客户端自己的模型；如需此模式，仍需在支持 MCP 的 AI 客户端连接本项目 MCP Server。现有 MCP 与 CLI 路径保持可用。
 

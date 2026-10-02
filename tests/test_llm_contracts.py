@@ -154,10 +154,21 @@ def test_repair_guidance_expands_cover_letter_underflow_from_evidence_only() -> 
     ))
 
     assert "DO NOT SHORTEN" in guidance
-    assert "paragraph 3: add at least 8 words" in guidance
-    assert "total: add at least 10 words" in guidance
-    assert "add only concise details explicitly supported by the cited evidence" in guidance.casefold()
+    assert "paragraph 3: add at least 18 words" in guidance
+    assert "total: add at least 20 words" in guidance
+    assert "add distinct technical detail supported by the cited evidence" in guidance.casefold()
     assert "Do not invent claims or metrics" in guidance
+
+
+def test_repair_guidance_leaves_word_count_margin_after_live_underflow() -> None:
+    guidance = _repair_guidance(ValueError(
+        "cover letter word budget exceeded: paragraph 2=107 (expected 115-195); "
+        "total=212 (expected 210-350)"
+    ))
+
+    assert "paragraph 2: add at least 18 words" in guidance
+    assert "10-word safety margin" in guidance
+    assert "do not repeat claims or metrics already used in another paragraph" in guidance.casefold()
 
 
 def test_cover_letter_second_paragraph_allows_concise_evidence_without_padding() -> None:
@@ -329,6 +340,10 @@ def test_cover_letter_company_policy_uses_only_supplied_context() -> None:
     assert provider.policies == ["jd_only", "verified_context_only"]
     assert "SYNTHETIC COVER LETTER CALIBRATION" in provider.tasks[0]
     assert "SYNTHETIC COVER LETTER CALIBRATION" not in provider.tasks[1]
+    assert "Do not preview" in provider.tasks[0]
+    assert "technical story that belongs in Paragraph 2" in provider.tasks[0]
+    assert "Do not repeat" in provider.tasks[0]
+    assert "the headline claim, metric" in provider.tasks[0]
 
 
 def test_generated_resume_and_cover_use_source_supported_technology_casing() -> None:
@@ -391,6 +406,59 @@ def test_cover_letter_rejects_blacklisted_term_missing_from_cited_evidence() -> 
         asyncio.run(draft_cover(
             tailored, "Example Co", "professional", HallucinatingProvider()
         ))
+
+
+@pytest.mark.parametrize("repair", [True, False])
+@pytest.mark.parametrize("role, source_tool, jd_tool", [
+    ("customer_service", "Zendesk", "Salesforce"),
+    ("finance_operations", "Excel", "SAP"),
+])
+def test_cover_letter_retries_jd_only_tool_without_weakening_citations(
+    repair: bool, role: str, source_tool: str, jd_tool: str,
+) -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class ToolProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            paragraphs = _valid_cover_paragraphs()
+            paragraphs[1] += (
+                f" {jd_tool}." if len(self.tasks) == 1 or not repair else f" {source_tool}."
+            )
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["skill:Tools:0"],
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "test@example.com"},
+        "sections": [], "skills": {"Tools": [source_tool]},
+    }
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = ToolProvider()
+
+    if repair:
+        cover = asyncio.run(draft_cover(
+            tailored, "Example Co", "professional", provider,
+            jd_analysis={"role_type": role, "nice_to_haves": [jd_tool]},
+        ))
+        assert source_tool in cover["paragraphs"][1]
+        assert jd_tool not in " ".join(cover["paragraphs"])
+        assert cover["evidence_ids"] == ["skill:Tools:0"]
+    else:
+        with pytest.raises(ValueError, match="absent from cited evidence"):
+            asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+    assert len(provider.tasks) == 2
+    assert jd_tool.casefold() in provider.tasks[1].casefold()
+    assert "Do not claim tools merely because the JD requests them" in provider.tasks[1]
 
 
 def test_cover_letter_tone_retries_with_feedback_and_lower_temperature() -> None:
@@ -480,7 +548,145 @@ def test_cover_letter_cross_paragraph_repetition_requests_rewrite() -> None:
     cover = asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
     assert len(provider.tasks) == 2
     assert "cross_paragraph_repetition:" in provider.tasks[1]
+    assert "Do not just synonym-swap the repeated phrase" in provider.tasks[1]
     assert cover["paragraphs"] == _valid_cover_paragraphs()
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_cover_letter_retries_unsupported_duration_with_strict_final_gate(repair: bool) -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class DurationProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            paragraphs = _valid_cover_paragraphs()
+            if len(self.tasks) == 1 or not repair:
+                paragraphs[0] = "2 years " + paragraphs[0]
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["skill:Tools:0"],
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "test@example.com"},
+        "profile": "Finance analyst with documented reconciliation.",
+        "sections": [], "skills": {"Tools": ["Excel"]},
+    }
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = DurationProvider()
+    if repair:
+        cover = asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+        assert cover["paragraphs"] == _valid_cover_paragraphs()
+        assert cover["evidence_ids"] == ["skill:Tools:0"]
+    else:
+        with pytest.raises(ValueError, match="unsupported metrics.*2"):
+            asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+    assert len(provider.tasks) == 2
+    assert "Remove unsupported numeric claims" in provider.tasks[1]
+
+
+@pytest.mark.parametrize("mixed_verified_metric", [False, True])
+def test_cover_letter_bounded_numeric_sentence_removal_preserves_source_facts(
+    mixed_verified_metric: bool,
+) -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class StubbornProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.calls += 1
+            paragraphs = _valid_cover_paragraphs()
+            paragraphs[1] += (
+                " Handled 120 invoices with a 64% gain."
+                if mixed_verified_metric else " Delivered an invented 64% gain."
+            )
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": paragraphs,
+                "closing": "Sincerely", "evidence_ids": ["profile"],
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "test@example.com"},
+        "profile": "Processed 120 invoices in Excel.", "sections": [], "skills": {},
+    }
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = StubbornProvider()
+
+    if mixed_verified_metric:
+        with pytest.raises(ValueError, match="unsupported metrics.*64"):
+            asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+    else:
+        cover = asyncio.run(draft_cover(tailored, "Example Co", "professional", provider))
+        assert cover["paragraphs"] == _valid_cover_paragraphs()
+        assert cover["evidence_ids"] == ["profile"]
+        assert cover["evidence_gaps"] == [
+            "Removed unsupported numeric sentence from paragraph 2"
+        ]
+    assert provider.calls == 2
+
+
+def test_cover_prompt_numeric_claims_are_grounded_per_evidence_id() -> None:
+    class OfflineProvider:
+        available = False
+        model_name = "offline"
+
+    class CaptureProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.task = ""
+            self.payload = {}
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.task = task
+            self.payload = payload
+            return response_model.model_validate({
+                "salutation": "Dear Team,", "paragraphs": _valid_cover_paragraphs(),
+                "closing": "Sincerely", "evidence_ids": ["section:0:item:0:bullet:0"],
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "test@example.com"},
+        "sections": [{"type": "experience", "title": "Finance Experience", "items": [{
+            "title": "Analyst", "organization": "Example", "dates": "2024--2026",
+            "bullets": [
+                "Reconciled 120 supplier invoices in Excel.",
+                "Reduced exceptions by 8% with documented checks.",
+                "Prepared audit-ready month-end reports.",
+            ],
+        }]}], "skills": {"Tools": ["Excel"]},
+    }
+    tailored = asyncio.run(tailor_resume(cv, {}, OfflineProvider()))
+    provider = CaptureProvider()
+
+    asyncio.run(draft_cover(
+        tailored, "Example Co", "professional", provider,
+        jd_analysis={"role_type": "finance_operations", "nice_to_haves": ["SAP"]},
+    ))
+
+    numeric = provider.payload["VERIFIED_NUMERIC_CLAIMS_BY_EVIDENCE_ID"]
+    assert "120" in numeric["section:0:item:0:bullet:0"]
+    assert "8%" in numeric["section:0:item:0:bullet:1"]
+    assert "section:0:item:0:bullet:2" not in numeric
+    assert "2" not in {value for values in numeric.values() for value in values}
+    assert "64" not in {value for values in numeric.values() for value in values}
+    assert "do not calculate years" in provider.task
 
 
 def test_dynamic_resume_exemplars_match_role_and_pydantic_dto() -> None:
@@ -714,3 +920,123 @@ def test_resume_retries_technology_claim_without_item_evidence() -> None:
     assert "section:0:item:0" in provider.tasks[1]
     assert "python" in provider.tasks[1].casefold()
     assert result["sections"][0]["items"][0]["bullets"] == ["Built a documented pipeline."]
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_resume_retries_unsupported_experience_duration_and_restores_source_profile(
+    repair: bool,
+) -> None:
+    class DurationProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.tasks.append(task)
+            profile = (
+                "Finance analyst with documented reconciliation."
+                if repair and len(self.tasks) == 2 else
+                "Finance analyst with 2 years of reconciliation experience."
+            )
+            return response_model.model_validate({
+                "profile": profile, "profile_evidence_ids": ["profile"],
+                "sections": [{"type": "experience", "title": "Experience", "items": [{
+                    "source_item_id": "section:0:item:0",
+                    "bullets": [{"text": "Reconciled 120 invoices in Excel.",
+                                 "evidence_ids": ["section:0:item:0:bullet:0"]}],
+                }]}], "skills": {"Tools": ["Excel"]}, "evidence_gaps": [], "strategy": {},
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "profile": "Finance analyst with documented reconciliation.",
+        "sections": [{"type": "experience", "title": "Experience", "items": [{
+            "title": "Finance Analyst", "organization": "Example", "dates": "2024--2026",
+            "bullets": ["Reconciled 120 invoices in Excel."],
+        }]}], "skills": {"Tools": ["Excel"]},
+    }
+    provider = DurationProvider()
+    if repair:
+        result = asyncio.run(tailor_resume(cv, {"role_type": "finance_operations"}, provider))
+        assert result["profile"] == "Finance analyst with documented reconciliation."
+        assert "120" in result["sections"][0]["items"][0]["bullets"][0]
+        assert not any("Restored source profile" in gap for gap in result["evidence_gaps"])
+    else:
+        result = asyncio.run(tailor_resume(cv, {"role_type": "finance_operations"}, provider))
+        assert result["profile"] == cv["profile"]
+        assert "Restored source profile after unsupported numeric claim" in result["evidence_gaps"]
+        assert "120" in result["sections"][0]["items"][0]["bullets"][0]
+    assert len(provider.tasks) == 2
+    assert "Unsupported numeric claims" in provider.tasks[1]
+    assert "derived years of experience" in provider.tasks[1]
+
+
+def test_resume_restores_only_bullet_with_persistent_unsupported_metric() -> None:
+    class DurationProvider:
+        available = True
+        model_name = "test"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            self.calls += 1
+            return response_model.model_validate({
+                "profile": "Finance analyst with documented reconciliation.",
+                "profile_evidence_ids": ["profile"],
+                "sections": [{"type": "experience", "title": "Experience", "items": [{
+                    "source_item_id": "section:0:item:0",
+                    "bullets": [{"text": "Reconciled 120 invoices in Excel over 2 years.",
+                                 "evidence_ids": ["section:0:item:0:bullet:0"]}],
+                }]}], "skills": {"Tools": ["Excel"]}, "evidence_gaps": [], "strategy": {},
+            })
+
+    cv = {
+        "name": "Candidate", "contact": {"email": "candidate@example.com"},
+        "profile": "Finance analyst with documented reconciliation.",
+        "sections": [{"type": "experience", "title": "Experience", "items": [{
+            "title": "Finance Analyst", "organization": "Example", "dates": "2024--2026",
+            "bullets": ["Reconciled 120 invoices in Excel."],
+        }]}], "skills": {"Tools": ["Excel"]},
+    }
+    provider = DurationProvider()
+
+    result = asyncio.run(tailor_resume(cv, {"role_type": "finance_operations"}, provider))
+
+    assert provider.calls == 2
+    assert result["sections"][0]["items"][0]["bullets"] == cv["sections"][0]["items"][0]["bullets"]
+    assert result["profile"] == cv["profile"]
+    assert result["evidence_gaps"] == [
+        "Restored source bullet after unsupported numeric claim: section:0:item:0:0"
+    ]
+
+
+def test_resume_drops_unsupported_skill_labels_without_aborting_generation() -> None:
+    class SkillLabelProvider:
+        available = True
+        model_name = "test"
+
+        async def complete_json(self, task, payload, response_model, temperature=0.2):
+            return response_model.model_validate({
+                "profile": "Python engineer.",
+                "profile_evidence_ids": ["profile"],
+                "sections": [],
+                "skills": {"Languages": ["Python"], "Claims": ["Distributed Training"]},
+                "evidence_gaps": [],
+                "strategy": {},
+            })
+
+    cv = {
+        "name": "Candidate",
+        "contact": {"email": "candidate@example.com"},
+        "profile": "Python engineer.",
+        "sections": [],
+        "skills": {"Languages": ["Python"]},
+    }
+
+    result = asyncio.run(tailor_resume(cv, {}, SkillLabelProvider()))
+
+    assert result["skills"] == {"Languages": ["Python"]}
+    assert result["evidence_gaps"] == ["Removed unsupported skill label: Distributed Training"]

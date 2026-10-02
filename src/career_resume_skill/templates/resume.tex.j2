@@ -1,8 +1,14 @@
 \documentclass[10pt,a4paper]{article}
 \usepackage{fontspec}
-\setmainfont{DejaVu Serif}
+<% if contains_cjk %>\IfFontExistsTF{Noto Sans CJK SC}{\setmainfont{Noto Sans CJK SC}}{%
+\IfFontExistsTF{Microsoft YaHei}{\setmainfont{Microsoft YaHei}}{\PackageError{career-resume-skill}{CJK font unavailable}{Install Noto Sans CJK SC or Microsoft YaHei}}}
+<% else %>\setmainfont{DejaVu Serif}<% endif %>
 \usepackage{enumitem}
+\usepackage{tabularx}
 \usepackage[hidelinks]{hyperref}
+\emergencystretch=3em
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
 <% if compact == 0 %>\newcommand{\resumeMargin}{0.58in}
 \newcommand{\resumeItemSep}{1pt}
 \newcommand{\resumeSectionSep}{4pt}
@@ -19,7 +25,15 @@
 \setlength{\parindent}{0pt}
 \setlist[itemize]{leftmargin=*,itemsep=\resumeItemSep,topsep=1pt,parsep=0pt,partopsep=0pt}
 \newcommand{\resumeSection}[1]{\vspace{\resumeSectionSep}{\large\bfseries #1}\par\vspace{1pt}\hrule\vspace{2pt}}
-\newcommand{\resumeSubheading}[4]{\textbf{#1}\hfill #2\\\textit{#3}\hfill\textit{#4}\par}
+\newcommand{\resumeSubheading}[4]{%
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedleft\arraybackslash}p{0.36\linewidth}@{}}
+{\bfseries #1} & #2\\
+{\itshape #3} & {\itshape #4}
+\end{tabularx}\par}
+\newcommand{\resumeSubheadingSingle}[2]{%
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedleft\arraybackslash}p{0.36\linewidth}@{}}
+{\bfseries #1} & #2
+\end{tabularx}\par}
 \newcommand{\resumeItem}[1]{\item #1}
 \begin{document}
 \begin{center}
@@ -30,13 +44,13 @@
 <% for section in sections %>
 \resumeSection{<< section.title >>}
 <% for item in section.get('items', []) %>
-\resumeSubheading{<< item.get('title', '') >>}{<< item.get('dates', '') >>}{<< item.get('organization', '') >>}{<< item.get('location', '') >>}
+<% if item.get('organization') or item.get('location') %>\resumeSubheading{<< item.get('title', '') >>}{<< item.get('dates', '') >>}{<< item.get('organization', '') >>}{<< item.get('location', '') >>}<% else %>\resumeSubheadingSingle{<< item.get('title', '') >>}{<< item.get('dates', '') >>}<% endif %>
 <% if item.get('bullets') %>\begin{itemize}
 <% for bullet in item.bullets %>\resumeItem{<< bullet >>}
 <% endfor %>\end{itemize}<% endif %>
 <% endfor %>
 <% endfor %>
-<% if skills %>\resumeSection{Skills}
-<% for group, values in skills.items() %>\textbf{<< group|latex_escape >>:} <% if values is string %><< values >><% else %><< values|join(', ') >><% endif %>\\
+<% if skills.values()|select|list %>\resumeSection{Skills}
+<% for group, values in skills.items() if values %>\textbf{<< group|latex_escape >>:} <% if values is string %><< values >><% else %><< values|join(', ') >><% endif %>\\
 <% endfor %><% endif %>
 \end{document}

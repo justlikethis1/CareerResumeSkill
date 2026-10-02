@@ -33,9 +33,12 @@ def normalize_technology_casing(text: str, source_text: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         term = match.group()
+        canonical_term = canonical[term.casefold()]
+        case_sensitive_source = canonical_term == "Lever"
         supported = re.search(
-            r"(?<![\w+])" + re.escape(term) + r"(?![\w+])",
-            source_text, flags=re.IGNORECASE,
+            r"(?<![\w+])" + re.escape(canonical_term if case_sensitive_source else term) + r"(?![\w+])",
+            source_text,
+            flags=0 if case_sensitive_source else re.IGNORECASE,
         )
         return canonical[term.casefold()] if supported else term
 

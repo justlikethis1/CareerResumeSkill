@@ -1,5 +1,6 @@
 import base64
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -459,6 +460,121 @@ def test_inject_docx_clones_existing_bullet_paragraph_style(tmp_path: Path) -> N
     assert "First result." in generated
     assert "Second result." in generated
     assert "Third result." in generated
+
+
+def test_company_locations_remain_right_aligned_in_exported_pdf(tmp_path: Path) -> None:
+    if find_libreoffice() is None:
+        pytest.skip("DOCX PDF alignment check needs LibreOffice")
+    source = tmp_path / "source.docx"
+    output = tmp_path / "tailored.docx"
+    document = Document()
+    for company, location, long_spaces in (
+        ("Research Lab", "Zhejiang, China", False),
+        ("Trading Center", "Hangzhou, China", True),
+    ):
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(6.2), WD_TAB_ALIGNMENT.RIGHT)
+        paragraph.add_run(company)
+        if long_spaces:
+            paragraph.add_run("               ")
+        else:
+            paragraph.add_run().add_tab()
+        paragraph.add_run(" " + location)
+    body = document.add_paragraph()
+    body.paragraph_format.tab_stops.add_tab_stop(Inches(6.2), WD_TAB_ALIGNMENT.RIGHT)
+    body.add_run("Body with a trailing tab").add_tab()
+    document.save(source)
+
+    inject_docx_bullet_groups(source, output, {})
+    result = Document(output)
+    assert result.paragraphs[0].text == "Research Lab\t Zhejiang, China"
+    assert result.paragraphs[1].text == "Trading Center\t Hangzhou, China"
+    assert "\t" not in result.paragraphs[2].text
+    pdf = convert_docx_to_pdf(output)
+    positions: dict[str, float] = {}
+
+    def collect(text, cm, tm, font, size):
+        for label in ("Research Lab", "Trading Center", "Zhejiang, China", "Hangzhou, China"):
+            if label in text:
+                positions[label] = tm[4]
+
+    PdfReader(pdf).pages[0].extract_text(visitor_text=collect)
+
+    assert len(positions) == 4
+    assert all(positions[place] - positions[company] > 280 for company, place in (
+        ("Research Lab", "Zhejiang, China"),
+        ("Trading Center", "Hangzhou, China"),
+    ))
+    assert abs(positions["Zhejiang, China"] - positions["Hangzhou, China"]) < 20
+
+
+def test_variable_length_locations_share_right_edge_without_company_collision(tmp_path: Path) -> None:
+    if find_libreoffice() is None or shutil.which("pdftotext") is None:
+        pytest.skip("PDF word bounding boxes need LibreOffice and pdftotext")
+    source = tmp_path / "source.docx"
+    document = Document()
+    for company, place in (
+        ("Research Lab", "China"),
+        ("Institute of Flexible Electronics Technology of THU",
+         "Jiaxing, Zhejiang, Peoples Republic of China"),
+    ):
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(6.2), WD_TAB_ALIGNMENT.RIGHT)
+        paragraph.add_run(company)
+        paragraph.add_run().add_tab()
+        paragraph.add_run(" " + place)
+    document.save(source)
+    output = inject_docx_bullet_groups(source, tmp_path / "tailored.docx", {})
+    pdf = convert_docx_to_pdf(output)
+    result = subprocess.run(
+        [shutil.which("pdftotext"), "-bbox", str(pdf), "-"],
+        capture_output=True, text=True, check=True,
+    )
+    words = [word for word in ET.fromstring(result.stdout.encode()).iter()
+             if ET.QName(word).localname == "word"]
+
+    def word(label: str):
+        return next(value for value in words if value.text == label)
+
+    right_edges = [float(value.get("xMax")) for value in words if value.text == "China"]
+    assert len(right_edges) == 2
+    assert abs(right_edges[0] - right_edges[1]) < 2
+    first_china = next(value for value in words if value.text == "China")
+    assert float(word("Research").get("yMin")) == float(first_china.get("yMin"))
+    assert float(word("Jiaxing,").get("yMin")) > float(word("THU").get("yMax"))
+
+
+def test_education_date_stays_beside_degree_below_location(tmp_path: Path) -> None:
+    if find_libreoffice() is None:
+        pytest.skip("Education PDF alignment check needs LibreOffice")
+    source = tmp_path / "education.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(6.2), WD_TAB_ALIGNMENT.RIGHT)
+    paragraph.add_run("University of Science and Technology" + " " * 18 + "Hong Kong, China" + " " * 90)
+    paragraph.add_run("Artificial Intelligence and Entrepreneurship")
+    paragraph.add_run().add_tab()
+    paragraph.add_run("09.2026-06.2028")
+    document.save(source)
+
+    output = inject_docx_bullet_groups(source, tmp_path / "education-output.docx", {})
+    education = Document(output).paragraphs[0]
+    assert not education._p.xpath(".//w:br")
+    pdf = convert_docx_to_pdf(output)
+    positions: dict[str, tuple[float, float]] = {}
+
+    def collect(text, cm, tm, font, size):
+        for label in ("Artificial Intelligence and Entrepreneurship", "09.2026"):
+            if label in text:
+                positions[label] = (tm[4], tm[5])
+
+    PdfReader(pdf).pages[0].extract_text(visitor_text=collect)
+
+    assert len(positions) == 2
+    degree_x, degree_y = positions["Artificial Intelligence and Entrepreneurship"]
+    date_x, date_y = positions["09.2026"]
+    assert abs(degree_y - date_y) < 1
+    assert date_x - degree_x > 250
 
 
 def test_empty_bullet_group_removes_unselected_source_bullets(tmp_path: Path) -> None:
