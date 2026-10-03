@@ -317,3 +317,13 @@ python -m career_resume_skill.docx_cli --help
 ```
 
 遇到安装或运行问题时，先调用 `check_environment` 或执行 `python -m career_resume_skill.cli --doctor`。它会报告 `DEEPSEEK_API_KEY` 是否已配置、项目内 Tectonic 是否可用、Windows 默认路径下是否存在 LibreOffice、关键 Python 依赖版本及输出目录可写性；不会显示密钥值。
+
+## 📄 License
+
+本项目采用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（知识共享署名-非商业性使用 4.0 国际）许可协议。
+
+- **个人/学习使用**：欢迎随意学习、研究、修改及个人使用。
+- **商业限制**：**严禁**任何形式的商业盈利行为（包括但不限于封装为付费 API、打包进商业简历改写软件或作为付费咨询工具等）。
+- **版权署名**：二次分发或开源修改版时，须保留原作者署名（Haoxuan Jiang）。
+
+如需商业授权或合作，请联系原作者。
